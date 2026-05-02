@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        WME Place Harmonizer Beta
 // @namespace   WazeUSA
-// @version     2026.05.02.02
+// @version     2026.05.02.03
 // @description Harmonizes, formats, and locks a selected place
 // @author      WMEPH Development Group
 // @include      https://www.waze.com/editor*
@@ -47,6 +47,7 @@
     'v 2026.05.02.000 : Take 3 on the Bug where venue spacific PNH defult services would cresh the script! Orginal Code has this as not active!',
     'v 2026.05.02.001 : Fixed Map Highlights for places with PURs when Venue layer is not active.',
     'v 2026.05.02.002 : Set Map Highling shap for venue type resadental to triangle!',
+    'v 2026.05.02.003 : Fixed loading and mangment functions for WhiteLists',
   ];
 
   // **************************************************************************************************************
@@ -1018,11 +1019,28 @@
     let wlString;
     if (decompress) {
       wlString = localStorage.getItem(WL_LOCAL_STORE_NAME_COMPRESSED);
-      wlString = LZString.decompressFromUTF16(wlString);
+      if (!wlString) {
+        logDev('Compressed whitelist not found, trying uncompressed fallback');
+        wlString = localStorage.getItem(WL_LOCAL_STORE_NAME);
+      } else {
+        wlString = LZString.decompressFromUTF16(wlString);
+      }
     } else {
       wlString = localStorage.getItem(WL_LOCAL_STORE_NAME);
     }
-    _venueWhitelist = JSON.parse(wlString);
+
+    if (!wlString) {
+      logDev('No whitelist found in localStorage');
+      _venueWhitelist = {};
+      return;
+    }
+
+    try {
+      _venueWhitelist = JSON.parse(wlString);
+    } catch (e) {
+      logDev('Error parsing whitelist:', e);
+      _venueWhitelist = {};
+    }
   }
 
   function backupWhitelistToLS(compress) {
@@ -11209,13 +11227,39 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
   }
 
   /**
-   * Extracts the current compressed whitelist from localStorage and decompresses it into the UI textarea.
+   * Extracts the current whitelist from localStorage (tries compressed first, falls back to uncompressed).
    * Used for backing up or sharing whitelist data. Shows instructions to copy/paste data to safe location.
    * Resets the add-count reminder to show it once per session.
    */
   function onWLPullClick() {
-    $('#WMEPH-WLInput').val(LZString.decompressFromUTF16(localStorage.getItem(WL_LOCAL_STORE_NAME_COMPRESSED)));
-    $('#PlaceHarmonizerWLToolsMsg').empty().append('<p style="color:green">To backup the data, copy & paste the text in the box to a safe location.<p>');
+    let wlToPull = '';
+    const compressedWL = localStorage.getItem(WL_LOCAL_STORE_NAME_COMPRESSED);
+    const uncompressedWL = localStorage.getItem(WL_LOCAL_STORE_NAME);
+
+    if (compressedWL) {
+      try {
+        wlToPull = LZString.decompressFromUTF16(compressedWL);
+        if (!wlToPull || wlToPull.length === 0) {
+          throw new Error('Decompressed data is empty');
+        }
+      } catch (e) {
+        logDev('Error decompressing WL for pull:', e.message);
+        if (uncompressedWL) {
+          wlToPull = uncompressedWL;
+          logDev('Using uncompressed backup for pull');
+        }
+      }
+    } else if (uncompressedWL) {
+      wlToPull = uncompressedWL;
+      logDev('Using uncompressed WL for pull (no compressed version found)');
+    }
+
+    if (wlToPull) {
+      $('#WMEPH-WLInput').val(wlToPull);
+      $('#PlaceHarmonizerWLToolsMsg').empty().append('<p style="color:green">To backup the data, copy & paste the text in the box to a safe location.<p>');
+    } else {
+      $('#PlaceHarmonizerWLToolsMsg').empty().append('<p style="color:red">Error: No whitelist data found to pull<p>');
+    }
     setWMEPHSetting('WMEPH_WLAddCount', 1);
   }
 
@@ -11225,7 +11269,25 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
    * Excludes the placeholder entry (1.1.1) from counts.
    */
   function onWLStatsClick() {
-    const currWLData = JSON.parse(LZString.decompressFromUTF16(localStorage.getItem(WL_LOCAL_STORE_NAME_COMPRESSED)));
+    let currWLData;
+    try {
+      const compressedWL = localStorage.getItem(WL_LOCAL_STORE_NAME_COMPRESSED);
+      const uncompressedWL = localStorage.getItem(WL_LOCAL_STORE_NAME);
+
+      if (compressedWL) {
+        const decompressed = LZString.decompressFromUTF16(compressedWL);
+        currWLData = JSON.parse(decompressed);
+      } else if (uncompressedWL) {
+        logDev('Using uncompressed WL for stats (no compressed version found)');
+        currWLData = JSON.parse(uncompressedWL);
+      } else {
+        throw new Error('No whitelist data found');
+      }
+    } catch (e) {
+      logDev('Error loading whitelist for stats:', e.message);
+      $('#PlaceHarmonizerWLToolsMsg').empty().append(`<p style="color:red">Error: Could not load whitelist - ${e.message}<p>`);
+      return;
+    }
     const countryWL = {};
     const stateWL = {};
     const entries = Object.keys(currWLData).filter((key) => key !== '1.1.1');
@@ -11269,7 +11331,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
         (venueKey) => venueKey !== '1.1.1' && (currWLData[venueKey].state === stateToRemove || (!currWLData[venueKey].state && stateToRemove === 'None')),
       );
       if (venuesToRemove.length > 0) {
-        if (localStorage.WMEPH_WLAddCount === '1') {
+        if (getWMEPHSetting('WMEPH_WLAddCount') === 1) {
           WazeWrap.Alerts.confirm(
             SCRIPT_NAME,
             `Are you sure you want to clear all whitelist data for ${stateToRemove}? This CANNOT be undone. ` + 'Press OK to delete, cancel to preserve the data.',
@@ -11913,7 +11975,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
     const strayKeys = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key && (key.startsWith('WMEPH-') || key.startsWith('WMEPH_')) && key !== 'WMEPH-Settings') {
+      if (key && (key.startsWith('WMEPH-') || key.startsWith('WMEPH_')) && key !== 'WMEPH-Settings' && key !== 'WMEPH-venueWhitelistNew' && key !== 'WMEPH-venueWhitelistCompressed') {
         strayKeys.push(key);
         localStorage.removeItem(key);
         i--; // Adjust index since we removed an item
@@ -11992,7 +12054,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
             return SEVERITY_COLORS[severity];
           },
           getPointRadius: ({ zoomLevel }) => {
-            return zoomLevel > 17 ? 15 : 10;
+            return zoomLevel > 17 ? 13 : 8;
           },
           getGraphicName: ({ feature }) => {
             return feature?.properties?.isResidential ? 'triangle' : 'circle';
@@ -12195,23 +12257,70 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       },
     });
 
-    // Whitelist initialization
-    if (validateWLS(LZString.decompressFromUTF16(localStorage.getItem(WL_LOCAL_STORE_NAME_COMPRESSED))) === false) {
-      // If no compressed WL string exists
-      if (validateWLS(localStorage.getItem(WL_LOCAL_STORE_NAME)) === false) {
-        // If no regular WL exists
-        _venueWhitelist = { '1.1.1': { Placeholder: {} } }; // Populate with a dummy place
-        saveWhitelistToLS(false);
-        saveWhitelistToLS(true);
-      } else {
-        // if regular WL string exists, then transfer to compressed version
-        setWMEPHSetting('WMEPH-OneTimeWLBU', localStorage.getItem(WL_LOCAL_STORE_NAME));
-        loadWhitelistFromLS(false);
-        saveWhitelistToLS(true);
-        WazeWrap.Alerts.info(SCRIPT_NAME, 'Whitelists are being converted to a compressed format.  If you have trouble with your WL, please submit an error report.');
+    // Whitelist initialization - use only compressed version (uncompressed is optional backup)
+    const compressedWL = localStorage.getItem(WL_LOCAL_STORE_NAME_COMPRESSED);
+    const uncompressedWL = localStorage.getItem(WL_LOCAL_STORE_NAME);
+
+    if (compressedWL) {
+      // Try to decompress and load compressed version
+      try {
+        const decompressed = LZString.decompressFromUTF16(compressedWL);
+        if (validateWLS(decompressed)) {
+          loadWhitelistFromLS(true);
+          // Log successful decompression with state breakdown
+          const stateCount = {};
+          let totalVenues = 0;
+          for (const venueID in _venueWhitelist) {
+            if (venueID !== '1.1.1') {
+              totalVenues++;
+              const state = _venueWhitelist[venueID].state || 'Unknown';
+              stateCount[state] = (stateCount[state] || 0) + 1;
+            }
+          }
+          logDev(`✓ Compressed whitelist decompressed OK - ${totalVenues} venues, by state: ${JSON.stringify(stateCount)}`);
+        } else {
+          throw new Error('Decompressed data failed validation');
+        }
+      } catch (e) {
+        logDev('✗ Error with compressed whitelist:', e.message);
+        if (uncompressedWL && validateWLS(uncompressedWL)) {
+          // Fallback to uncompressed backup (exists only if WL was < 4.8MB when saved)
+          loadWhitelistFromLS(false);
+          const stateCount = {};
+          let totalVenues = 0;
+          for (const venueID in _venueWhitelist) {
+            if (venueID !== '1.1.1') {
+              totalVenues++;
+              const state = _venueWhitelist[venueID].state || 'Unknown';
+              stateCount[state] = (stateCount[state] || 0) + 1;
+            }
+          }
+          logDev(`⚠ Using uncompressed backup - ${totalVenues} venues, by state: ${JSON.stringify(stateCount)}`);
+        } else {
+          logDev('✗ No valid whitelist found, creating new');
+          _venueWhitelist = { '1.1.1': { Placeholder: {} } };
+          saveWhitelistToLS(true);
+        }
       }
+    } else if (uncompressedWL && validateWLS(uncompressedWL)) {
+      // Legacy: only uncompressed exists (shouldn't happen with current code)
+      loadWhitelistFromLS(false);
+      const stateCount = {};
+      let totalVenues = 0;
+      for (const venueID in _venueWhitelist) {
+        if (venueID !== '1.1.1') {
+          totalVenues++;
+          const state = _venueWhitelist[venueID].state || 'Unknown';
+          stateCount[state] = (stateCount[state] || 0) + 1;
+        }
+      }
+      logDev(`⚠ Loading legacy uncompressed whitelist (no compressed found) - ${totalVenues} venues, by state: ${JSON.stringify(stateCount)}`);
+      saveWhitelistToLS(true); // Create compressed version for future
     } else {
-      loadWhitelistFromLS(true);
+      // No whitelist found
+      logDev('✗ No whitelist found, creating new');
+      _venueWhitelist = { '1.1.1': { Placeholder: {} } };
+      saveWhitelistToLS(true);
     }
 
     if (USER.name === 'ggrane') {
