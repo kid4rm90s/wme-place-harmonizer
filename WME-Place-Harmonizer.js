@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        WME Place Harmonizer Beta
 // @namespace   WazeUSA
-// @version     2026.05.02.01
+// @version     2026.05.02.02
 // @description Harmonizes, formats, and locks a selected place
 // @author      WMEPH Development Group
 // @include      https://www.waze.com/editor*
@@ -46,6 +46,7 @@
     'v 2026.04.31.003 : Take 2 on the Bug where venue spacific PNH defult services would cresh the script! Orginal Code has this as not active!',
     'v 2026.05.02.000 : Take 3 on the Bug where venue spacific PNH defult services would cresh the script! Orginal Code has this as not active!',
     'v 2026.05.02.001 : Fixed Map Highlights for places with PURs when Venue layer is not active.',
+    'v 2026.05.02.002 : Set Map Highling shap for venue type resadental to triangle!',
   ];
 
   // **************************************************************************************************************
@@ -7028,6 +7029,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
                   wmephSeverity: severity,
                   venueId: venue.id,
                   name: venue.name,
+                  isResidential: venue.residential === true || venue.categories?.includes('RESIDENTIAL'),
                 },
               });
             }
@@ -11992,6 +11994,9 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
           getPointRadius: ({ zoomLevel }) => {
             return zoomLevel > 17 ? 15 : 10;
           },
+          getGraphicName: ({ feature }) => {
+            return feature?.properties?.isResidential ? 'triangle' : 'circle';
+          },
         },
         styleRules: [
           // Rule 1: Filter highlight (wmephHighlight = '1') - magenta stroke only, highest priority
@@ -11999,6 +12004,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
             predicate: (props, zoomLevel) => props.wmephHighlight === '1',
             style: {
               pointRadius: '${getPointRadius}',
+              graphicName: '${getGraphicName}',
               fillOpacity: 0,
               strokeWidth: 5,
               strokeColor: '#F0F',
@@ -12010,6 +12016,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
             predicate: (props, zoomLevel) => props.wmephHighlight !== '1' && (props.wmephSeverity === 'lock' || props.wmephSeverity === 'lock1' || props.wmephSeverity === 'adLock'),
             style: {
               pointRadius: '${getPointRadius}',
+              graphicName: '${getGraphicName}',
               fillOpacity: 0,
               strokeColor: '${getSeverityColor}',
               strokeWidth: 5,
@@ -12022,6 +12029,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
             predicate: (props, zoomLevel) => props.wmephHighlight !== '1' && props.parkingType !== undefined && props.wmephSeverity !== undefined,
             style: {
               pointRadius: '${getPointRadius}',
+              graphicName: '${getGraphicName}',
               fillColor: '${getColor}',
               fillOpacity: 0.5,
               strokeColor: '${getSeverityColor}',
@@ -12034,6 +12042,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
             predicate: (props, zoomLevel) => props.wmephHighlight !== '1' && props.wmephSeverity !== undefined,
             style: {
               pointRadius: '${getPointRadius}',
+              graphicName: '${getGraphicName}',
               fillOpacity: 0,
               strokeColor: '${getSeverityColor}',
               strokeWidth: 5,
@@ -12045,6 +12054,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
             predicate: (props, zoomLevel) => props.wmephHighlight !== '1' && props.parkingType !== undefined,
             style: {
               pointRadius: '${getPointRadius}',
+              graphicName: '${getGraphicName}',
               fillColor: '${getColor}',
               fillOpacity: 0.5,
               strokeOpacity: 0,
@@ -12428,6 +12438,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
               name: venue.name,
               parkingType: parkingType,
               highlightType: 'parking',
+              isResidential: venue.residential === true || venue.categories?.includes('RESIDENTIAL'),
             },
           };
           sdk.Map.addFeatureToLayer({
@@ -12485,6 +12496,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
             venueId: v.id,
             isPoint: v.geometry?.type === 'Point',
             highlightType: 'filter',
+            isResidential: v.residential === true || v.categories?.includes('RESIDENTIAL'),
           },
         };
         featuresToAdd.push(feature);
