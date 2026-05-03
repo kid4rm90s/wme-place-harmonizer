@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        WME Place Harmonizer Beta
 // @namespace   WazeUSA
-// @version     2026.05.03.01
+// @version     2026.05.03.02
 // @description Harmonizes, formats, and locks a selected place
 // @author      WMEPH Development Group
 // @include      https://www.waze.com/editor*
@@ -10,7 +10,7 @@
 // @include      https://beta.waze.com/*/editor*
 // @exclude      https://www.waze.com/user/editor*
 // @exclude      https://www.waze.com/dashboard/editor
-// @require     https://greasyfork.org/scripts/24851-wazewrap/code/WazeWrap.js
+// @require     https://wazedev.github.io/WazeWrap/WazeWrap.js
 // @require     https://update.greasyfork.org/scripts/509664/WME%20Utils%20-%20Bootstrap.js
 // @require     https://greasyfork.org/scripts/37486-wme-utils-hoursparser/code/WME%20Utils%20-%20HoursParser.js
 // @require     https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.4.4/lz-string.min.js
@@ -40,20 +40,11 @@
   // **************************************************************************************************************
   const SHOW_UPDATE_MESSAGE = true;
   const SCRIPT_UPDATE_MESSAGE = [
-    'v 2026.04.31.000 : Green = Complete Highlights are back.',
-    'v 2026.04.31.001 : Fixed Bug where venue spacific PNH defult services would cresh the script!',
-    'v 2026.04.31.002 : Fixed Google Search "spy glass" on PUR popup',
-    'v 2026.04.31.003 : Take 2 on the Bug where venue spacific PNH defult services would cresh the script! Orginal Code has this as not active!',
-    'v 2026.05.02.00 : Take 3 on the Bug where venue spacific PNH defult services would cresh the script! Orginal Code has this as not active!',
-    'v 2026.05.02.01 : Fixed Map Highlights for places with PURs when Venue layer is not active.',
-    'v 2026.05.02.02 : Set Map Highling shape for venue type resadental to triangle!',
-    'v 2026.05.02.03 : Fixed loading and mangment functions for WhiteLists',
-    'v 2026.05.02.04 : Optimize: Skip full harmonization for services-only venue changes',
     'v 2026.05.03.00 :',
     '    Fixed making the "More Info" turn Green for changes in Services to Parking Lots',
     '    WazeWrap is Back, Re-enabling Sript Update Monitor System',
     'v 2026.05.03.01 : WazeWrap is NOT Back',
-    
+    'v 2026.05.03.02 : WazeWrap Back via Git IO for now, and taking another shoot at finding the Setting "Active" bug',
   ];
 
   // **************************************************************************************************************
@@ -305,6 +296,7 @@
     'VALLET_SERVICE',
   ];
   const WME_SERVICES_ARRAY = [...GENERAL_SERVICES, ...PARKING_LOT_SERVICES];
+
   const COLLEGE_ABBREVIATIONS = ['USF', 'USFSP', 'UF', 'UCF', 'UA', 'UGA', 'FSU', 'UM', 'SCP', 'FAU', 'FIU'];
   // Change place.name to title case
   const TITLECASE_SETTINGS = {
@@ -8473,11 +8465,11 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
                 }
               }
               // If PNH match, set wifi service.
-              if (args.pnhMatch && !_servicesBanner.addWiFi.checked) {
+              if (args.pnhMatch && _servicesBanner?.addWiFi && !_servicesBanner.addWiFi.checked) {
                 _servicesBanner.addWiFi.action();
               }
               // Set hotel hours to 24/7 for all hotels.
-              if (!_servicesBanner.add247.checked) {
+              if (_servicesBanner?.add247 && !_servicesBanner.add247.checked) {
                 _servicesBanner.add247.action();
               }
             } else if (args.priPNHPlaceCat === CAT.BANK_FINANCIAL && !args.pnhMatch.notABank) {
@@ -8655,10 +8647,12 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
 
           if (!args.highlightOnly) {
             // Highlight 24/7 button if hours are set that way, and add button for all places
-            if (isAlwaysOpen(venue)) {
-              _servicesBanner.add247.checked = true;
+            if (_servicesBanner && _servicesBanner.add247) {
+              if (isAlwaysOpen(venue)) {
+                _servicesBanner.add247.checked = true;
+              }
+              _servicesBanner.add247.active = true;
             }
-            _servicesBanner.add247.active = true;
 
             if (!args.hoursOverlap) {
               const tempHours = args.openingHours.slice();
@@ -11785,10 +11779,12 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
         }
       });
       // Highlight 24/7 button if hours are set that way, and add button for all places
-      if (isAlwaysOpen(venue)) {
-        _servicesBanner.add247.checked = true;
+      if (_servicesBanner && _servicesBanner.add247) {
+        if (isAlwaysOpen(venue)) {
+          _servicesBanner.add247.checked = true;
+        }
+        _servicesBanner.add247.active = true;
       }
-      _servicesBanner.add247.active = true;
     }
   }
 
@@ -12735,10 +12731,12 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       // For debugging purposes.  May be removed when no longer needed.
       unsafeWindow.PNH_DATA = PNH_DATA;
       unsafeWindow.WMEPH_FLAG = Flag;
+      unsafeWindow._wmephBetaList = _wmephBetaList;
       initPerformancePanel();
 
       // Log full PNH data structure
       console.log('PNH_DATA:', PNH_DATA);
+      console.log('_wmephBetaList:', _wmephBetaList);
     }
   }
 
@@ -12759,10 +12757,10 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
     log('Initializing SDK and categories...');
     sdk = await bootstrap({
       scriptName: SCRIPT_NAME,
-       //scriptUpdateMonitor: {
-       //    downloadUrl: (IS_BETA_VERSION ? dec(BETA_DOWNLOAD_URL) : PROD_DOWNLOAD_URL),
-       //    scriptVersion: SCRIPT_VERSION,
-       //},
+       scriptUpdateMonitor: {
+           downloadUrl: (IS_BETA_VERSION ? dec(BETA_DOWNLOAD_URL) : PROD_DOWNLOAD_URL),
+           scriptVersion: SCRIPT_VERSION,
+       },
     });
     try {
       initializeCategories();
@@ -12776,7 +12774,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
     log('Starting Place Harmonizer initialization');
     await placeHarmonizerInit();
     devTestCode();
-    //showScriptInfoAlert();
+    showScriptInfoAlert();
   }
 
   wmephbootstrap();
