@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        WME Place Harmonizer Beta
 // @namespace   WazeUSA
-// @version     2026.05.05.00
+// @version     2026.05.05.01
 // @description Harmonizes, formats, and locks a selected place
 // @author      WMEPH Development Group
 // @include      https://www.waze.com/editor*
@@ -43,6 +43,7 @@
     'v 2026.05.04.00 : Relase WW and scriptUpdateMonitor',
     'v 2026.05.04.01 : Updated Services Icons for Active / Non-Active color in Light and Dark Mode',
     'v 2026.05.05.00 : Fixed Convert Area to Point Place function',
+    'v 2026.05.05.01 : Fixed Entry/exit point function',
   ];
 
   // **************************************************************************************************************
@@ -283,7 +284,10 @@
     OTHER: 'OTHER',
   };
   // Common payment types found at: https://wazeopedia.waze.com/wiki/USA/Places/EV_charging_station
-  const COMMON_EV_PAYMENT_METHODS = {
+  const /* The above code is a comment in JavaScript. It appears to be defining a constant or variable
+  named COMMON_EV_PAYMENT_METHODS and using a delimiter " */
+  
+  COMMON_EV_PAYMENT_METHODS = {
     'Blink Charging': [EV_PAYMENT_METHOD.APP, EV_PAYMENT_METHOD.MEMBERSHIP_CARD, EV_PAYMENT_METHOD.PLUG_IN_AUTO_CHARGER, EV_PAYMENT_METHOD.OTHER],
     ChargePoint: [EV_PAYMENT_METHOD.APP, EV_PAYMENT_METHOD.CREDIT, EV_PAYMENT_METHOD.DEBIT, EV_PAYMENT_METHOD.MEMBERSHIP_CARD],
     'Electrify America': [EV_PAYMENT_METHOD.APP, EV_PAYMENT_METHOD.CREDIT, EV_PAYMENT_METHOD.DEBIT, EV_PAYMENT_METHOD.MEMBERSHIP_CARD, EV_PAYMENT_METHOD.PLUG_IN_AUTO_CHARGER],
@@ -381,23 +385,7 @@
   const BAD_PHONE = 'badPhone';
   // Feeds that are not in use and it's safe to delete the place. Use regex.
   const FEEDS_TO_SKIP = [/^google$/i, /^yext\d?/i, /^wazeads$/i, /^parkme$/i, /^navads(na)?$/i];
-  // Do not highlight places if any of these are the primary category.
-  const CATS_TO_IGNORE_CUSTOMER_PARKING_HIGHLIGHT = [
-    CAT.BRIDGE,
-    CAT.CANAL,
-    CAT.CHARGING_STATION,
-    CAT.CONSTRUCTION_SITE,
-    CAT.ISLAND,
-    CAT.JUNCTION_INTERCHANGE,
-    CAT.NATURAL_FEATURES,
-    CAT.PARKING_LOT,
-    CAT.RESIDENCE_HOME,
-    CAT.RIVER_STREAM,
-    CAT.SEA_LAKE_POOL,
-    CAT.SWAMP_MARSH,
-    CAT.TUNNEL,
-    'RESIDENTIAL', // SDK residential category
-  ];
+
   const UPDATED_FIELDS = {
     name: {
       updated: false,
@@ -5509,18 +5497,41 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       static defaultButtonTooltip = 'Add an entry/exit point';
 
       static venueIsFlaggable(args) {
-        if (!args.categories.includes(CAT.PARKING_LOT)) return false;
-        try {
-          const fullVenue = sdk.DataModel.Venues.getById({ venueId: args.venue.id });
-          return !fullVenue?.navigationPoints?.length;
-        } catch {
+        // Exclude categories that don't need navigationPoints
+        const categoriesToExclude = [CAT.BRIDGE, CAT.ISLAND, CAT.FOREST_GROVE, CAT.SEA_LAKE_POOL, CAT.RIVER_STREAM, CAT.CANAL, CAT.DAM, CAT.TUNNEL, CAT.JUNCTION_INTERCHANGE, CAT.RESIDENCE_HOME];
+
+        if (categoriesToExclude.some((cat) => args.categories.includes(cat))) {
           return false;
         }
+
+        return !args.venue?.navigationPoints?.length;
       }
 
       action() {
-        $('wz-button.navigation-point-add-new').click();
-        harmonizePlaceGo(this.args.venue, 'harmonize');
+        const { venue } = this.args;
+
+        // Create new entry point at venue geometry center
+        const center = turf.centroid(venue.geometry).geometry.coordinates;
+
+        const newNavigationPoints = [
+          {
+            point: {
+              type: 'Point',
+              coordinates: center,
+            },
+            isEntry: true,
+            isExit: true,
+            isPrimary: true,
+            name: '',
+          },
+        ];
+
+        sdk.DataModel.Venues.replaceNavigationPoints({
+          venueId: venue.id,
+          navigationPoints: newNavigationPoints,
+        });
+
+        harmonizePlaceGo(venue, 'harmonize');
       }
     },
     PlaStopPointUnmoved: class extends FlagBase {
@@ -6563,7 +6574,6 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
     return SUBCATEGORIES_BY_ID[categoryId]?.localizedName ?? categoryId;
   }
 
-
   /**
    * Injects a Google search icon button into Place Update Request (PUR) popup headers.
    * Monitors for PUR panel openings and adds a search button that performs a Google search
@@ -6933,8 +6943,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       if ($('#WMEPH_banner').length && venue?.id && !_isHarmonizing) {
         // Compare current services with previous state to detect services-only changes
         const currentServices = JSON.stringify((venue.services || []).sort());
-        const isServicesOnlyChange = _previousVenueServices !== null &&
-                                     _previousVenueServices === currentServices;
+        const isServicesOnlyChange = _previousVenueServices !== null && _previousVenueServices === currentServices;
 
         // Skip harmonization if ONLY services changed (UI sync handles it)
         if (!isServicesOnlyChange) {
@@ -8815,8 +8824,8 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
         const updateHnAction = actions && actions.find((action) => action && action.newAttributes && action.newAttributes.houseNumber);
         if (updateHnAction) args.currentHN = updateHnAction.newAttributes.houseNumber;
         // Check if venue has a street and city (use actual address objects, not outdated venue properties)
-        args.hasStreet = (args.addr?.street && !args.addr.street.isEmpty);
-        args.hasCity = (args.addr?.city && !args.addr.city.isEmpty);
+        args.hasStreet = args.addr?.street && !args.addr.street.isEmpty;
+        args.hasCity = args.addr?.city && !args.addr.city.isEmpty;
         args.ignoreParkingLots = $('#WMEPH-DisablePLAExtProviderCheck').prop('checked');
 
         if (!isVenueResidential(venue) && (isVenueParkingLot(venue) || args.nameBase?.trim().length)) {
@@ -10305,28 +10314,32 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       const lon = firstPoint[0];
       const lat = firstPoint[1];
       const url = `https://${location.host}/SearchServer/mozi?lon=${lon}&lat=${lat}&format=PROTO_JSON_FULL&venue_id=venues.${venue.id}`;
-      _pendingFeedRequest = $.getJSON(url).done((res) => {
-        // Only append if still on same venue (prevents stale responses from accumulating)
-        const currentVenue = getSelectedVenue();
-        if (!currentVenue || currentVenue.id !== venueID) return;
+      _pendingFeedRequest = $.getJSON(url)
+        .done((res) => {
+          // Only append if still on same venue (prevents stale responses from accumulating)
+          const currentVenue = getSelectedVenue();
+          if (!currentVenue || currentVenue.id !== venueID) return;
 
-        let feedNames = res.venue.external_providers?.filter((prov) => !FEEDS_TO_SKIP.some((skipRegex) => skipRegex.test(prov.provider))).map((prov) => prov.provider);
-        if (feedNames) feedNames = [...new Set(feedNames)]; // Remove duplicates
-        if (feedNames?.length) {
-          const $rowDiv = $('<div>').css({ padding: '3px 4px 0px 4px', 'background-color': 'yellow' });
-          $rowDiv.append(
-            $('<div>').text('PLEASE DO NOT DELETE').css({ 'font-weight': '500' }),
-            $('<div>')
-              .text(`Place is connected to the following feed${feedNames.length > 1 ? 's' : ''}:`)
-              .css({ 'font-size': '13px' }),
-            $('<div>').text(feedNames.join(', ')).css({ 'font-size': '13px' }),
-          );
-          $wmephPrePanel.append($rowDiv);
-          // Potential code to hide the delete key if needed.
-          // setTimeout(() => $('#delete-button').setAttribute('disabled', true), 200);
-        }
-        _pendingFeedRequest = null; // Clear request tracker when done
-      }).fail(() => { _pendingFeedRequest = null; }); // Clear on error too
+          let feedNames = res.venue.external_providers?.filter((prov) => !FEEDS_TO_SKIP.some((skipRegex) => skipRegex.test(prov.provider))).map((prov) => prov.provider);
+          if (feedNames) feedNames = [...new Set(feedNames)]; // Remove duplicates
+          if (feedNames?.length) {
+            const $rowDiv = $('<div>').css({ padding: '3px 4px 0px 4px', 'background-color': 'yellow' });
+            $rowDiv.append(
+              $('<div>').text('PLEASE DO NOT DELETE').css({ 'font-weight': '500' }),
+              $('<div>')
+                .text(`Place is connected to the following feed${feedNames.length > 1 ? 's' : ''}:`)
+                .css({ 'font-size': '13px' }),
+              $('<div>').text(feedNames.join(', ')).css({ 'font-size': '13px' }),
+            );
+            $wmephPrePanel.append($rowDiv);
+            // Potential code to hide the delete key if needed.
+            // setTimeout(() => $('#delete-button').setAttribute('disabled', true), 200);
+          }
+          _pendingFeedRequest = null; // Clear request tracker when done
+        })
+        .fail(() => {
+          _pendingFeedRequest = null;
+        }); // Clear on error too
     }
   }
 
@@ -12651,6 +12664,23 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
     try {
       const venues = sdk.DataModel.Venues.getAll();
       const featuresToAdd = [];
+      // Do not highlight places if any of these are the primary category.
+      const CATS_TO_IGNORE_CUSTOMER_PARKING_HIGHLIGHT = [
+        CAT.BRIDGE,
+        CAT.CANAL,
+        CAT.CHARGING_STATION,
+        CAT.CONSTRUCTION_SITE,
+        CAT.ISLAND,
+        CAT.JUNCTION_INTERCHANGE,
+        CAT.NATURAL_FEATURES,
+        CAT.PARKING_LOT,
+        CAT.RESIDENCE_HOME,
+        CAT.RIVER_STREAM,
+        CAT.SEA_LAKE_POOL,
+        CAT.SWAMP_MARSH,
+        CAT.TUNNEL,
+        'RESIDENTIAL', // SDK residential category
+      ];
 
       venues.forEach((v) => {
         // Filter: exclude venues with PARKING_FOR_CUSTOMERS service or certain categories
@@ -12821,10 +12851,10 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
     log('Initializing SDK and categories...');
     sdk = await bootstrap({
       scriptName: SCRIPT_NAME,
-       scriptUpdateMonitor: {
-           downloadUrl: (IS_BETA_VERSION ? dec(BETA_DOWNLOAD_URL) : PROD_DOWNLOAD_URL),
-           scriptVersion: SCRIPT_VERSION,
-       },
+      scriptUpdateMonitor: {
+        downloadUrl: IS_BETA_VERSION ? dec(BETA_DOWNLOAD_URL) : PROD_DOWNLOAD_URL,
+        scriptVersion: SCRIPT_VERSION,
+      },
     });
     try {
       initializeCategories();
