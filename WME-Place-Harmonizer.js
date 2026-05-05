@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        WME Place Harmonizer Beta
 // @namespace   WazeUSA
-// @version     2026.05.04.01
+// @version     2026.05.05.00
 // @description Harmonizes, formats, and locks a selected place
 // @author      WMEPH Development Group
 // @include      https://www.waze.com/editor*
@@ -40,12 +40,9 @@
   // **************************************************************************************************************
   const SHOW_UPDATE_MESSAGE = true;
   const SCRIPT_UPDATE_MESSAGE = [
-    'v 2026.05.03.00 : Fixed making the "More Info" turn Green for changes in Services to Parking Lots',
-    'v 2026.05.03.02 : WazeWrap Back via Git IO for now, and taking another shoot at finding the Setting "Active" bug',
-    'v 2026.05.03.03 : Fixed description validators (USPS/SuspectDesc/DisplayNote) in WMEPH mode by reading from DOM - validators skip in scanning mode',
-    'v 2026.05.03.05 : Fixed crash when "Hide Report script error button" setting is active - removed dead code accessing non-existent button',
     'v 2026.05.04.00 : Relase WW and scriptUpdateMonitor',
     'v 2026.05.04.01 : Updated Services Icons for Active / Non-Active color in Light and Dark Mode',
+    'v 2026.05.05.00 : Fixed Convert Area to Point Place function',
   ];
 
   // **************************************************************************************************************
@@ -3563,12 +3560,24 @@
       }
 
       action() {
-        if (this.isVenueResidential(args.venue)) {
+        const { venue } = this.args;
+        if (isVenueResidential(venue)) {
           // Residential areas cannot be converted to points
-        } else {
-          $('wz-checkable-chip.geometry-type-control-point').click();
+          return;
         }
-        harmonizePlaceGo(this.args.venue, 'harmonize'); // Rerun the script to update fields and lock
+
+        // Convert area polygon to point at polygon centroid
+        const coords = venue.geometry.coordinates[0]; // First ring of polygon
+        const lon = coords.reduce((sum, [x]) => sum + x, 0) / coords.length;
+        const lat = coords.reduce((sum, [, y]) => sum + y, 0) / coords.length;
+
+        const point = {
+          type: 'Point',
+          coordinates: [lon, lat],
+        };
+
+        sdk.DataModel.Venues.updateVenue({ venueId: venue.id, geometry: point });
+        harmonizePlaceGo(venue, 'harmonize');
       }
     },
     AreaNotPoint: class extends WLActionFlag {
