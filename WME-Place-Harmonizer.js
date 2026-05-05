@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        WME Place Harmonizer Beta
 // @namespace   WazeUSA
-// @version     2026.05.05.01
+// @version     2026.05.05.02
 // @description Harmonizes, formats, and locks a selected place
 // @author      WMEPH Development Group
 // @include      https://www.waze.com/editor*
@@ -44,6 +44,7 @@
     'v 2026.05.04.01 : Updated Services Icons for Active / Non-Active color in Light and Dark Mode',
     'v 2026.05.05.00 : Fixed Convert Area to Point Place function',
     'v 2026.05.05.01 : Fixed Entry/exit point function',
+    'v 2026.05.05.02 : Fixed Detected address fields to places with no address',
   ];
 
   // **************************************************************************************************************
@@ -2804,7 +2805,7 @@
      * @returns
      */
     static eval(args) {
-      if (this.venueIsFlaggable(args)) {
+      if (this.venueIsFlaggable(args) && !FlagBase.currentFlags.hasFlag(this)) {
         const flag = new this(args);
         flag.args = args;
         return flag;
@@ -2929,7 +2930,7 @@
       static eval(args) {
         let result = null;
         if (!args.highlightOnly) {
-          if (!args.addr.state || !args.addr.country) {
+          if (!args.addr.state || !args.addr.country || !args.addr.street?.name || !args.addr.city?.name) {
             if (sdk.Map.getZoomLevel() < 4) {
               if ($('#WMEPH-EnableIAZoom').prop('checked')) {
                 const coords = getVenueLonLat(args.venue);
@@ -2944,13 +2945,13 @@
             } else {
               let inferredAddress = inferAddress(args.venue, 7); // Pull address info from nearby segments
 
-              if (inferredAddress?.state && inferredAddress.country) {
+              if (inferredAddress?.street?.id && inferredAddress?.state && inferredAddress?.country) {
                 if ($('#WMEPH-AddAddresses').prop('checked')) {
                   // update the venue's address if option is enabled
                   updateAddress(args.venue, inferredAddress, args.actions);
                   UPDATED_FIELDS.address.updated = true;
                   result = new this(inferredAddress);
-                } else if (![CAT.JUNCTION_INTERCHANGE].includes(args.categories[0])) {
+                } else if (![CAT.JUNCTION_INTERCHANGE].includes(args.categories[0]) && !FlagBase.currentFlags.hasFlag(Flag.CityMissing)) {
                   new Flag.CityMissing(args);
                 }
               } else {
@@ -2960,7 +2961,7 @@
               }
             }
           }
-        } else if (!args.addr.state || !args.addr.country) {
+        } else if (!args.addr.state || !args.addr.country || !args.addr.street?.name || !args.addr.city?.name) {
           // only highlighting
           result = { exit: true };
           if (args.venue.adLocked) {
@@ -10762,7 +10763,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
     };
 
     const hasStreetName = (segment) => {
-      if (!segment || segment.type !== 'segment') return false;
+      if (!segment) return false;
       const addr = getSegmentAddress(segment);
       return addr && !addr.isEmpty && addr.street?.name;
     };
@@ -10818,12 +10819,13 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       }
     };
 
-    const { entryExitPoints } = venue;
-    if (entryExitPoints?.length) {
-      // Get the primary stop point, if one exists.  If none, get the first point.
-      stopPoint = entryExitPoints.find((pt) => pt.primary === true) || entryExitPoints[0];
+    const { navigationPoints } = venue;
+    if (navigationPoints?.length) {
+      // Get the primary navigation point, if one exists. If none, get the first point.
+      const primaryPoint = navigationPoints.find((pt) => pt.isPrimary === true) || navigationPoints[0];
+      stopPoint = primaryPoint.point.coordinates;
     } else {
-      // If no stop points, just use the venue's centroid.
+      // If no navigation points, just use the venue's centroid.
       const centroid = getVenueCentroid(venue);
       if (!centroid) {
         logDev('inferAddress: Unable to get venue centroid');
@@ -10900,29 +10902,19 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
    * @param {Object} address Object containing country, state, city, street, houseNumber properties (IDs/names as required by SDK).
    */
   function updateAddress(feature, address) {
-    logDev('updateAddress called with:', { feature: feature?.id, addressType: typeof address });
-    if (!feature || !address) {
-      logDev('updateAddress: missing feature or address');
+    logDev('updateAddress called with:', { feature: feature?.id, street: address?.street?.name });
+    if (!feature || !address || !address.street?.id) {
+      logDev('updateAddress: missing feature, address, or street ID');
       return;
     }
 
     try {
-      logDev('updateAddress: calling SDK updateAddress');
+      logDev('updateAddress: calling SDK updateAddress with streetId:', address.street.id);
       sdk.DataModel.Venues.updateAddress({
         venueId: feature.id,
-        countryId: address.country?.id,
-        stateId: address.state?.id,
-        cityName: address.city?.name,
-        streetName: address.street?.name,
+        streetId: address.street.id,
+        houseNumber: address.houseNumber,
       });
-
-      if (address.houseNumber) {
-        logDev('updateAddress: updating house number');
-        sdk.DataModel.Venues.updateAddress({
-          venueId: feature.id,
-          houseNumber: address.houseNumber,
-        });
-      }
       logDev('Address inferred and updated');
     } catch (e) {
       logDev('updateAddress error:', e);
