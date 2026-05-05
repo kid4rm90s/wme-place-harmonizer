@@ -17,9 +17,9 @@ const SEVERITY = {
 };
 
 // Special lock-related severities
-('lock'); // Locked place with no issues
-('lock1'); // Locked place with minor issues
-('adLock'); // Ad-locked place
+('lock'); // Locked place, below regional standard (Dark Magenta)
+('lock1'); // Locked place with minor issues, below regional standard (Hot Pink)
+('adLock'); // Ad-locked place (Gold)
 ```
 
 ---
@@ -30,15 +30,15 @@ All severity levels map to hex colors used for both map layer visualization and 
 
 ```javascript
 const SEVERITY_COLORS = {
-  [SEVERITY.GREEN]: '#00CC00', // complete
-  [SEVERITY.BLUE]: '#0000FF', // minor issues
-  [SEVERITY.YELLOW]: '#FFFF00', // moderate issues
-  [SEVERITY.RED]: '#FF0000', // major issues
-  [SEVERITY.PINK]: '#FF1493', // extreme issues
-  [SEVERITY.ORANGE]: '#FFA500', // other issues
-  lock: '#8B008B', // locked
-  lock1: '#FF69B4', // lock issue
-  adLock: '#FFD700', // ad-locked
+  [SEVERITY.GREEN]: '#00CC00', // Green - complete
+  [SEVERITY.BLUE]: '#0000FF', // Blue - minor issues
+  [SEVERITY.YELLOW]: '#FFFF00', // Yellow - moderate issues
+  [SEVERITY.RED]: '#FF0000', // Red - major issues
+  [SEVERITY.PINK]: '#FF1493', // Pink - extreme issues
+  [SEVERITY.ORANGE]: '#FFA500', // Orange - other issues
+  lock: '#8B008B', // Dark Magenta - locked below regional standard
+  lock1: '#FF69B4', // Hot Pink - locked below regional standard with minor issues
+  adLock: '#FFD700', // Gold - ad-locked (read-only)
 };
 ```
 
@@ -185,21 +185,46 @@ PVA is **NOT a WME venue attribute**. Rather, it's a **verification flag from th
 
 These are **NOT normal flags**, but special severity overrides that apply during **highlight-only mode**:
 
-- **`'lock'`** — Place is locked (lockRank increased) with NO other issues
-  - Triggers when: `totalSeverity === SEVERITY.GREEN && placeLockedFlag.hlLockFlag`
+**What hlLockFlag Means:**
+
+The `hlLockFlag` is set when a place is currently locked at a **lower level than the regional standard** for its category:
+
+```javascript
+if (args.venue.lockRank < args.levelToLock) {
+  hlLockFlag = true; // In highlight-only mode
+}
+```
+
+Where `args.levelToLock` is determined by:
+
+- **PNH regional standard** for the category in this region (e.g., hospitals should be level 5)
+- **Special case rules** (e.g., college parking in SER region = level 4)
+- **User rank limit** (can't exceed user's permission level)
+
+**Example:** A gas station locked at level 2 in a region where gas stations should be level 3 → `hlLockFlag = true`
+
+**Display States:**
+
+- **`'lock'`** — Place is locked but below regional standard, with NO other data issues
+  - Triggers when: `totalSeverity === SEVERITY.GREEN && placeLockedFlag?.hlLockFlag`
   - Color: Dark Magenta (#8B008B)
-- **`'lock1'`** — Place is locked with MINOR issues present
-  - Triggers when: `totalSeverity === SEVERITY.BLUE && placeLockedFlag.hlLockFlag`
+  - Meaning: Place is locked, but WMEPH wants to increase the lock level to meet regional standards
+
+- **`'lock1'`** — Place is locked but below regional standard, with MINOR data issues present
+  - Triggers when: `totalSeverity === SEVERITY.BLUE && placeLockedFlag?.hlLockFlag`
   - Color: Hot Pink (#FF69B4)
+  - Meaning: Place is locked, but has minor data gaps AND lock level is below regional standard
 - **`'adLock'`** — Place is ad-locked (read-only to general editors)
   - Triggers when: `venue.adLocked === true`
   - Color: Gold (#FFD700)
+  - Meaning: WazeBot or another system owns this data; editors cannot modify it
 
 **Lock Conditions:**
 
-- Lock only happens if `args.lockOK` is true AND `totalSeverity < SEVERITY.YELLOW`
-- Locks are determined to the user's permission level (can't lock above user rank)
-- In highlight-only mode, the lock severity is stored as the wmephSeverity for map display
+- Locking occurs if `args.lockOK` is true AND `totalSeverity < SEVERITY.YELLOW`
+- Target lock level is determined by regional standards (PNH data) for the place category
+- Locks are capped at user's permission level (can't lock above user rank)
+- In highlight-only mode, lock state is stored as wmephSeverity for map display (shows as 'lock', 'lock1', or 'adLock')
 
 #### **Special Extreme Issues (PINK - Severity 5)**
 

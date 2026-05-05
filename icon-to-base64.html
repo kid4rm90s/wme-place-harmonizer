@@ -147,11 +147,18 @@
 
         <div class="section">
             <h3>Color Options</h3>
-            <label for="colorPicker">Icon Color:</label>
-            <input type="color" id="colorPicker" value="#000000" style="width: 50px; height: 40px; cursor: pointer; border: 1px solid #ddd; border-radius: 4px;">
+            <label for="sourceColorPicker">Search For Color:</label>
+            <input type="color" id="sourceColorPicker" value="#000000" style="width: 50px; height: 40px; cursor: pointer; border: 1px solid #ddd; border-radius: 4px;">
+
+            <label for="toleranceSlider" style="margin-top: 10px;">Tolerance: <span id="toleranceValue">50</span>/255</label>
+            <input type="range" id="toleranceSlider" min="0" max="255" value="50" style="width: 100%; cursor: pointer; margin-top: 5px;">
+
+            <label for="replacementColorPicker" style="margin-top: 10px;">Replace With Color:</label>
+            <input type="color" id="replacementColorPicker" value="#000000" style="width: 50px; height: 40px; cursor: pointer; border: 1px solid #ddd; border-radius: 4px;">
+
             <button onclick="applyColor()">Apply Color</button>
             <div class="info">
-                Changes all black (#000000) pixels to selected color
+                Set the source color to find, adjust tolerance for fuzzy matching, and choose the replacement color
             </div>
         </div>
 
@@ -165,7 +172,16 @@
 
         <div class="section">
             <h3>Preview</h3>
-            <div class="preview" id="preview"></div>
+            <div style="display: flex; gap: 20px; justify-content: center;">
+                <div style="text-align: center;">
+                    <div style="font-size: 12px; color: #666; margin-bottom: 5px; font-weight: bold;">Original</div>
+                    <div class="preview" id="previewOriginal"></div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 12px; color: #666; margin-bottom: 5px; font-weight: bold;">Modified</div>
+                    <div class="preview" id="previewModified"></div>
+                </div>
+            </div>
         </div>
 
         <div class="section">
@@ -176,8 +192,20 @@
     </div>
 
     <script>
+        // Update tolerance display when slider changes
+        document.addEventListener('DOMContentLoaded', () => {
+            const slider = document.getElementById('toleranceSlider');
+            slider.addEventListener('input', (e) => {
+                document.getElementById('toleranceValue').textContent = e.target.value;
+            });
+        });
+
         let currentDataUrl = null;
         let currentFormat = null; // 'svg' or 'png'
+        let currentSourceColor = '#000000';
+        let currentTolerance = 50;
+        let currentReplacementColor = '#000000';
+        let originalDataUrl = null;
 
         function loadBase64() {
             const input = document.getElementById('base64Input').value.trim();
@@ -186,11 +214,20 @@
                 return;
             }
             currentDataUrl = input;
+            originalDataUrl = input;
             document.getElementById('output').textContent = input;
-            document.getElementById('preview').style.backgroundImage = `url('${input}')`;
+            document.getElementById('previewOriginal').style.backgroundImage = `url('${input}')`;
+            document.getElementById('previewModified').style.backgroundImage = `url('${input}')`;
 
             if (input.includes('svg')) currentFormat = 'svg';
             else if (input.includes('png')) currentFormat = 'png';
+        }
+
+        function colorDistance(r1, g1, b1, r2, g2, b2) {
+            const dr = r1 - r2;
+            const dg = g1 - g2;
+            const db = b1 - b2;
+            return Math.sqrt(dr * dr + dg * dg + db * db);
         }
 
         function applyColor() {
@@ -198,38 +235,67 @@
                 alert('No base64 data loaded. Convert an icon first.');
                 return;
             }
-            const color = document.getElementById('colorPicker').value;
+
+            currentSourceColor = document.getElementById('sourceColorPicker').value;
+            currentTolerance = parseInt(document.getElementById('toleranceSlider').value);
+            currentReplacementColor = document.getElementById('replacementColorPicker').value;
+
+            if (currentSourceColor === currentReplacementColor) {
+                alert('Source and replacement colors are the same. No changes will be visible.');
+                return;
+            }
+
             if (currentFormat === 'svg') {
-                colorizeBase64SVG(currentDataUrl, color);
+                colorizeBase64SVG(currentDataUrl, currentSourceColor, currentReplacementColor);
             } else if (currentFormat === 'png') {
-                colorizeBase64PNG(currentDataUrl, color);
+                colorizeBase64PNG(currentDataUrl, currentSourceColor, currentReplacementColor, currentTolerance);
             }
         }
 
-        function colorizeBase64SVG(dataUrl, newColor) {
+        function colorizeBase64SVG(dataUrl, sourceColor, replacementColor) {
             try {
                 const base64 = dataUrl.split(',')[1];
                 const svg = decodeURIComponent(escape(atob(base64)));
 
-                // Replace black colors with new color
-                let colorizedSvg = svg.replace(/fill="?#?000000"?/gi, `fill="${newColor}"`);
-                colorizedSvg = colorizedSvg.replace(/fill="?black"?/gi, `fill="${newColor}"`);
-                colorizedSvg = colorizedSvg.replace(/stroke="?#?000000"?/gi, `stroke="${newColor}"`);
-                colorizedSvg = colorizedSvg.replace(/stroke="?black"?/gi, `stroke="${newColor}"`);
+                let colorizedSvg = svg;
+
+                // Normalize source color for comparison
+                const sourceColorNorm = sourceColor.replace('#', '').toLowerCase();
+
+                // Replace fill and stroke attributes with hex colors (exact match)
+                colorizedSvg = colorizedSvg.replace(/fill="?#?([0-9a-fA-F]{6})"?/gi, (match, hexValue) => {
+                    if (hexValue.toLowerCase() === sourceColorNorm) {
+                        return `fill="${replacementColor}"`;
+                    }
+                    return match;
+                });
+
+                colorizedSvg = colorizedSvg.replace(/stroke="?#?([0-9a-fA-F]{6})"?/gi, (match, hexValue) => {
+                    if (hexValue.toLowerCase() === sourceColorNorm) {
+                        return `stroke="${replacementColor}"`;
+                    }
+                    return match;
+                });
+
+                // Handle "black" color name if searching for black
+                if (sourceColor.toLowerCase() === '#000000' || sourceColor.toLowerCase() === '000000') {
+                    colorizedSvg = colorizedSvg.replace(/fill="?black"?/gi, `fill="${replacementColor}"`);
+                    colorizedSvg = colorizedSvg.replace(/stroke="?black"?/gi, `stroke="${replacementColor}"`);
+                }
 
                 const newBase64 = btoa(unescape(encodeURIComponent(colorizedSvg)));
                 const newDataUrl = `data:image/svg+xml;base64,${newBase64}`;
 
                 currentDataUrl = newDataUrl;
                 document.getElementById('output').textContent = newDataUrl;
-                document.getElementById('preview').style.backgroundImage = `url('${newDataUrl}')`;
+                document.getElementById('previewModified').style.backgroundImage = `url('${newDataUrl}')`;
                 document.getElementById('cssOutput').value = generateCSS(newDataUrl);
             } catch (e) {
                 alert('Error colorizing SVG: ' + e.message);
             }
         }
 
-        function colorizeBase64PNG(dataUrl, newColor) {
+        function colorizeBase64PNG(dataUrl, sourceColor, replacementColor, tolerance) {
             try {
                 const img = new Image();
                 img.onload = () => {
@@ -238,14 +304,17 @@
                     canvas.height = img.height;
                     const ctx = canvas.getContext('2d');
 
-                    // Draw original image
                     ctx.drawImage(img, 0, 0);
 
-                    // Get image data and replace black with new color
                     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                     const data = imageData.data;
 
-                    const rgb = hexToRgb(newColor);
+                    const srcRgb = hexToRgb(sourceColor);
+                    const repRgb = hexToRgb(replacementColor);
+
+                    // Scale tolerance from 0-255 to 0-441 (max possible color distance)
+                    const maxDistance = Math.sqrt(255*255 + 255*255 + 255*255);
+                    const scaledTolerance = (tolerance / 255) * maxDistance;
 
                     for (let i = 0; i < data.length; i += 4) {
                         const r = data[i];
@@ -253,11 +322,12 @@
                         const b = data[i + 2];
                         const a = data[i + 3];
 
-                        // If pixel is black or near-black, replace it
-                        if (r < 50 && g < 50 && b < 50 && a > 200) {
-                            data[i] = rgb.r;
-                            data[i + 1] = rgb.g;
-                            data[i + 2] = rgb.b;
+                        const distance = colorDistance(r, g, b, srcRgb.r, srcRgb.g, srcRgb.b);
+
+                        if (distance <= scaledTolerance && a > 100) {
+                            data[i] = repRgb.r;
+                            data[i + 1] = repRgb.g;
+                            data[i + 2] = repRgb.b;
                         }
                     }
 
@@ -266,7 +336,7 @@
 
                     currentDataUrl = newDataUrl;
                     document.getElementById('output').textContent = newDataUrl;
-                    document.getElementById('preview').style.backgroundImage = `url('${newDataUrl}')`;
+                    document.getElementById('previewModified').style.backgroundImage = `url('${newDataUrl}')`;
                     document.getElementById('cssOutput').value = generateCSS(newDataUrl);
                 };
                 img.src = dataUrl;
@@ -390,9 +460,11 @@
         }
 
         function displayResult(dataUrl, name) {
+            originalDataUrl = dataUrl;
             currentDataUrl = dataUrl;
+            document.getElementById('previewOriginal').style.backgroundImage = `url('${dataUrl}')`;
+            document.getElementById('previewModified').style.backgroundImage = `url('${dataUrl}')`;
             document.getElementById('output').textContent = dataUrl;
-            document.getElementById('preview').style.backgroundImage = `url('${dataUrl}')`;
             document.getElementById('cssOutput').value = generateCSS(dataUrl);
         }
 
