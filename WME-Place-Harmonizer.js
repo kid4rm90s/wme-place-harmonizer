@@ -44,6 +44,7 @@
     'v 2026.05.05.01 : Fixed Entry/exit point function',
     'v 2026.05.05.02 : Fixed Detected address fields to places with no address',
     'v 2026.05.06.00 : Fixed: Only test for missing Navagation points on PLA',
+    'v 2026.05.06.01 : Fix address inference: accurate distance calculation & optimized node-based search',
   ];
 
   // **************************************************************************************************************
@@ -4300,15 +4301,18 @@
       static WL_KEY = 'removeUncommonEVPaymentMethods';
       static defaultWLTooltip = 'Whitelist uncommon EV payment types';
 
+      #network;
+      #paymentMethods;
+
       get message() {
         try {
-          const network = sdk.DataModel.Venues.ChargingStation.getNetwork({ venueId: this.args.venue.id });
-          this.originalNetwork = network;
-          let msg = `These payment methods are uncommon for the ${network} network. Verify if they are needed here:`;
-          const currentPaymentMethods = sdk.DataModel.Venues.ChargingStation.getPaymentMethods({ venueId: this.args.venue.id }) ?? [];
+          this.#network = sdk.DataModel.Venues.ChargingStation.getNetwork({ venueId: this.args.venue.id });
+          this.originalNetwork = this.#network;
+          let msg = `These payment methods are uncommon for the ${this.#network} network. Verify if they are needed here:`;
+          this.#paymentMethods = sdk.DataModel.Venues.ChargingStation.getPaymentMethods({ venueId: this.args.venue.id }) ?? [];
           const translations = I18n.translations[I18n.locale].edit.venue.category_attributes.payment_methods;
-          const list = currentPaymentMethods
-            ?.filter((method) => !COMMON_EV_PAYMENT_METHODS[network]?.includes(method))
+          const list = this.#paymentMethods
+            ?.filter((method) => !COMMON_EV_PAYMENT_METHODS[this.#network]?.includes(method))
             .map((method) => `- ${translations[method]}`)
             .join('<br>');
           msg += `<br>${list}<br>`;
@@ -4341,15 +4345,15 @@
         }
 
         try {
-          const network = sdk.DataModel.Venues.ChargingStation.getNetwork({ venueId: this.args.venue.id });
-          if (network !== this.originalNetwork) {
+          // Verify network hasn't changed, but use cached payment methods from message getter
+          const currentNetwork = sdk.DataModel.Venues.ChargingStation.getNetwork({ venueId: this.args.venue.id });
+          if (currentNetwork !== this.originalNetwork) {
             WazeWrap.Alerts.info(SCRIPT_NAME, 'EV charging station network has changed. Please run WMEPH again.', false, false);
             return;
           }
 
-          const commonPaymentMethods = COMMON_EV_PAYMENT_METHODS[network];
-          const currentPaymentMethods = sdk.DataModel.Venues.ChargingStation.getPaymentMethods({ venueId: this.args.venue.id }) ?? [];
-          const newPaymentMethods = currentPaymentMethods.slice().filter((method) => commonPaymentMethods?.includes(method));
+          const commonPaymentMethods = COMMON_EV_PAYMENT_METHODS[currentNetwork];
+          const newPaymentMethods = this.#paymentMethods.slice().filter((method) => commonPaymentMethods?.includes(method));
 
           const categoryAttributes = this.args.venue.categoryAttributes || {};
           const categoryAttrClone = JSON.parse(JSON.stringify(categoryAttributes));
@@ -5327,7 +5331,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       }
 
       static venueIsFlaggable(args) {
-        if (!args.categories.includes(CAT.PARKING_LOT)) return false;
+        if (!isVenueParkingLot(args.venue)) return false;
         try {
           const parkingType = sdk.DataModel.Venues.ParkingLot.getParkingLotType({ venueId: args.venue.id });
           return !parkingType;
@@ -5406,12 +5410,15 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       static venueIsFlaggable(args) {
         if (!isVenueParkingLot(args.venue)) return false;
 
-        const catAttr = args.venue.categoryAttributes;
-        const parkAttr = catAttr ? catAttr.PARKING_LOT : undefined;
-        if (parkAttr && parkAttr.costType && parkAttr.costType !== 'FREE' && parkAttr.costType !== 'UNKNOWN' && (!parkAttr.paymentType || !parkAttr.paymentType.length)) {
-          return true;
+        try {
+          const costType = sdk.DataModel.Venues.ParkingLot.getCostType({ venueId: args.venue.id });
+          if (!costType || costType === 'FREE' || costType === 'UNKNOWN') return false;
+
+          const paymentMethods = sdk.DataModel.Venues.ParkingLot.getPaymentMethods({ venueId: args.venue.id });
+          return !paymentMethods || paymentMethods.length === 0;
+        } catch {
+          return false;
         }
-        return false;
       }
 
       // eslint-disable-next-line class-methods-use-this
@@ -10707,122 +10714,133 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
   } // END findNearbyDuplicate function
 
   /**
-   * Infers a venue's address from nearby road segments using branching search algorithm.
-   * Starts with closest segment and recursively searches connected segments for street names.
-   * Uses Turf.js for distance calculations. Returns object with country, city, state, street.
-   * @param {Object} venue The WME venue object with geometry/centroid.
-   * @param {number} maxRecursionDepth Maximum depth to search through connected segments.
-   * @returns {Object|null} Object with country, city, state, street fields, or null if unavailable.
+   * Infers a venue's address from nearby road segments using node-based search algorithm.
+   * Algorithm:
+   * 1. Find closest node to venue (point-to-point distance via Turf.js)
+   * 2. Build segment index for O(1) node->segments lookups
+   * 3. Search recursively from closest node outward, collecting all named streets at each depth
+   * 4. Rank candidates by distance first (closest within 10m tolerance), then by road type priority
+   * 5. Road type priority: PRIVATE_ROAD > STREET > PRIMARY_STREET > MAJOR_HIGHWAY > MINOR_HIGHWAY > ALLEY
+   * 6. Excludes: freeways, ramps, walkways, railroads, parking lot roads, and other non-drivable types
+   * @param {Object} venue The WME venue object with navigationPoints or geometry/centroid.
+   * @param {number} maxRecursionDepth Maximum connectivity depth to search through segments.
+   * @returns {Object|null} Address object with country, city, state, street fields, or null if unavailable.
    */
   function inferAddress(venue, maxRecursionDepth) {
-    let distanceToSegment;
     let foundAddresses = [];
-    let i;
-    // Ignore pedestrian boardwalk, stairways, runways, and railroads
-    const IGNORE_ROAD_TYPES = [10, 16, 18, 19];
+    // Road type priority for address selection (lower priority number = preferred).
+    // Only these types are acceptable; others excluded below.
+    const ACCEPTABLE_ROAD_TYPES = {
+      17: 1,  // PRIVATE_ROAD (highest priority for local named roads)
+      1: 2,   // STREET
+      2: 3,   // PRIMARY_STREET
+      6: 4,   // MAJOR_HIGHWAY
+      7: 5,   // MINOR_HIGHWAY
+      22: 6,  // ALLEY (lowest priority)
+    };
+    // Excluded road types (non-addressable/non-drivable): freeways, ramps, walkways, railroads,
+    // pedestrian paths, ferries, parking lot roads, and other non-street segments.
+    const IGNORE_ROAD_TYPES = [3, 4, 5, 8, 9, 10, 15, 16, 18, 19, 20];
     let inferredAddress = {
       country: null,
       city: null,
       state: null,
       street: null,
     };
-    let n;
-    let orderedSegments = [];
 
-    // Get segments from SDK
-    let segments;
+    // Get segments and nodes from SDK
+    let segments, nodes;
     try {
       segments = sdk.DataModel.Segments.getAll() || [];
+      nodes = sdk.DataModel.Nodes.getAll() || [];
     } catch (e) {
-      logDev('inferAddress: Unable to access SDK segments', e);
+      logDev('inferAddress: Unable to access SDK data', e);
       segments = [];
+      nodes = [];
     }
 
     let stopPoint;
 
-    // Make sure a place is selected and segments are loaded.
-    if (!(venue && segments.length)) {
-      logDev('inferAddress: No venue or segments available');
+    // Make sure a place is selected and data is loaded.
+    if (!(venue && segments.length && nodes.length)) {
+      logDev('inferAddress: No venue or data available');
       return undefined;
     }
 
-    const getFCRank = (FC) => {
-      const typeToFCRank = {
-        3: 0, // freeway
-        6: 1, // major
-        7: 2, // minor
-        2: 3, // primary
-        1: 4, // street
-        20: 5, // PLR
-        8: 6, // dirt
-      };
-      return typeToFCRank[FC] || 100;
-    };
+    // Get priority for a road type (used for tiebreaking when candidates are equidistant).
+    const getRoadTypePriority = (roadType) => ACCEPTABLE_ROAD_TYPES[roadType] ?? 999;
 
+    // Check if segment has a named street (vs unnamed segment like connector roads).
     const hasStreetName = (segment) => {
       if (!segment) return false;
       const addr = getSegmentAddress(segment);
       return addr && !addr.isEmpty && addr.street?.name;
     };
 
-    const findClosestNode = () => {
-      const closestSegment = orderedSegments[0].segment;
-      try {
-        // Get nodes from SDK
-        const nodeA = sdk.DataModel.Nodes.getById({ nodeId: closestSegment.fromNodeId });
-        const nodeB = sdk.DataModel.Nodes.getById({ nodeId: closestSegment.toNodeId });
-        if (nodeA && nodeB) {
-          // Use Turf.js for distance calculation instead of OpenLayers
-          const ptCoords = [stopPoint.longitude || stopPoint[0], stopPoint.latitude || stopPoint[1]];
-          const distA = calculatePointDistance(ptCoords, [nodeA.geometry.coordinates[0], nodeA.geometry.coordinates[1]]);
-          const distB = calculatePointDistance(ptCoords, [nodeB.geometry.coordinates[0], nodeB.geometry.coordinates[1]]);
-          return distA < distB ? nodeA.id : nodeB.id;
-        }
-      } catch (e) {
-        logDev('findClosestNode: Error', e);
+    // Pre-compute node->segments index for O(1) lookups during recursive search.
+    // Filters out ignored road types upfront, reducing work during traversal.
+    const segmentsByNode = new Map();
+    for (const seg of segments) {
+      if (!IGNORE_ROAD_TYPES.includes(seg.roadType)) {
+        [seg.fromNodeId, seg.toNodeId].forEach(nodeId => {
+          if (!segmentsByNode.has(nodeId)) {
+            segmentsByNode.set(nodeId, []);
+          }
+          segmentsByNode.get(nodeId).push(seg);
+        });
       }
-      return undefined;
-    };
+    }
 
+    // Recursive search from starting node through connected segments, expanding outward until named streets found.
     const findConnections = (startingNodeID, recursionDepth) => {
-      let newNode;
+      // Stop if we've searched too far (prevent infinite loops in cyclic road networks).
+      if (recursionDepth > maxRecursionDepth) return;
 
-      // Limit search depth to avoid problems.
-      if (recursionDepth > maxRecursionDepth) {
-        return;
+      // O(1) lookup of all valid segments attached to this node (pre-filtered, excludes ignored types).
+      const connectedSegments = segmentsByNode.get(startingNodeID) || [];
+
+      // Partition segments: those with street names vs connectors/unnamed segments.
+      const namedSegments = [];
+      const unnamedSegments = [];
+
+      for (const seg of connectedSegments) {
+        if (hasStreetName(seg)) {
+          namedSegments.push(seg);
+        } else {
+          unnamedSegments.push(seg);
+        }
       }
 
-      // Populate variable with segments connected to starting node.
-      const connectedSegments = orderedSegments.filter((seg) => [seg.fromNodeId, seg.toNodeId].includes(startingNodeID));
-
-      // Check connected segments for address info.
-      const keys = Object.keys(connectedSegments);
-      for (let idx = 0; idx < keys.length; idx++) {
-        const k = keys[idx];
-        if (hasStreetName(connectedSegments[k].segment)) {
-          // Address found, push to array.
+      // If named streets found at this depth, collect all and stop expanding from this branch.
+      // Multiple candidates at same depth allow ranking by distance and road type later.
+      if (namedSegments.length > 0) {
+        for (const seg of namedSegments) {
+          const dist = turf.pointToLineDistance(
+            turf.point(stopPoint),
+            turf.lineString(seg.geometry.coordinates),
+            { units: 'meters' }
+          );
           foundAddresses.push({
             depth: recursionDepth,
-            distance: connectedSegments[k].distance,
-            segment: connectedSegments[k].segment,
+            distance: dist,
+            segment: seg,
           });
-          break;
-        } else {
-          // If not found, call function again starting from the other node on this segment.
-          const attr = connectedSegments[k].segment;
-          newNode = attr.fromNodeId === startingNodeID ? attr.toNodeId : attr.fromNodeId;
-          findConnections(newNode, recursionDepth + 1);
+        }
+      } else {
+        // No named streets at this node; recurse outward through unnamed segments to next connectivity level.
+        for (const seg of unnamedSegments) {
+          const nextNode = seg.fromNodeId === startingNodeID ? seg.toNodeId : seg.fromNodeId;
+          findConnections(nextNode, recursionDepth + 1);
         }
       }
     };
 
+    // Get venue's starting point: prefer primary navigation point, else first, else centroid.
     const { navigationPoints } = venue;
     if (navigationPoints?.length) {
-      // Get the primary navigation point, if one exists. If none, get the first point.
       const primaryPoint = navigationPoints.find((pt) => pt.isPrimary === true) || navigationPoints[0];
       stopPoint = primaryPoint.point.coordinates;
     } else {
-      // If no navigation points, just use the venue's centroid.
       const centroid = getVenueCentroid(venue);
       if (!centroid) {
         logDev('inferAddress: Unable to get venue centroid');
@@ -10831,64 +10849,50 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       stopPoint = centroid;
     }
 
-    // Go through segment array and calculate distances to segments.
-    for (i = 0, n = segments.length; i < n; i++) {
-      // Make sure the segment is not an ignored roadType.
-      if (!IGNORE_ROAD_TYPES.includes(segments[i].roadType)) {
-        distanceToSegment = calculatePointDistance(stopPoint, segments[i].geometry);
-        // Add segment object and its distanceTo to an array.
-        orderedSegments.push({
-          distance: distanceToSegment,
-          fromNodeID: segments[i].fromNodeId,
-          segment: segments[i],
-          toNodeID: segments[i].toNodeId,
-        });
+    // Find the map node closest to venue (point-to-point distance is O(n) but faster than
+    // testing point-to-line distance for all segments; this is the best starting point for traversal).
+    let closestNode = null;
+    let minDistance = Infinity;
+    const ptCoords = [stopPoint.longitude || stopPoint[0], stopPoint.latitude || stopPoint[1]];
+
+    for (const node of nodes) {
+      const dist = calculatePointDistance(ptCoords, node.geometry.coordinates);
+      if (dist < minDistance) {
+        minDistance = dist;
+        closestNode = node;
       }
     }
 
-    // Sort the array with segments and distance.
-    orderedSegments = _.sortBy(orderedSegments, 'distance');
-
-    // Check closest segment for address first.
-    if (hasStreetName(orderedSegments[0].segment)) {
-      inferredAddress = getSegmentAddress(orderedSegments[0].segment);
-    } else {
-      // If address not found on closest segment, try to find address through branching method.
-      findConnections(findClosestNode(), 1);
-      if (foundAddresses.length > 0) {
-        // If more than one address found at same recursion depth, look at FC of segments.
-        if (foundAddresses.length > 1) {
-          foundAddresses.forEach((element) => {
-            element.fcRank = getFCRank(element.segment.roadType);
-          });
-          foundAddresses = _.sortBy(foundAddresses, 'fcRank');
-          foundAddresses = _.filter(foundAddresses, {
-            fcRank: foundAddresses[0].fcRank,
-          });
-        }
-
-        // If multiple segments with same FC, Use address from segment with address that is closest by connectivity.
-        if (foundAddresses.length > 1) {
-          foundAddresses = _.sortBy(foundAddresses, 'depth');
-          foundAddresses = _.filter(foundAddresses, {
-            depth: foundAddresses[0].depth,
-          });
-        }
-
-        // If more than one of the closest segments by connectivity has the same FC, look for
-        // closest segment geometrically.
-        if (foundAddresses.length > 1) {
-          foundAddresses = _.sortBy(foundAddresses, 'distance');
-        }
-        logDev(foundAddresses[0].streetName, foundAddresses[0].depth);
-        inferredAddress = getSegmentAddress(foundAddresses[0].segment);
-      } else {
-        // Default to closest if branching method fails.
-        // Go through sorted segment array until a country, state, and city have been found.
-        const closestElem = orderedSegments.find((element) => hasStreetName(element.segment));
-        inferredAddress = closestElem ? getSegmentAddress(closestElem.segment) || inferredAddress : inferredAddress;
-      }
+    if (!closestNode) {
+      logDev('inferAddress: No closest node found');
+      return inferredAddress;
     }
+
+    // Start recursive search from closest node, expanding outward through connected segments.
+    findConnections(closestNode.id, 1);
+
+    if (foundAddresses.length > 0) {
+      // Sort all candidates by distance (closest first).
+      foundAddresses = _.sortBy(foundAddresses, 'distance');
+
+      const closestDistance = foundAddresses[0].distance;
+
+      // Collect candidates within 10m of closest (treat as equidistant tie).
+      // This small tolerance handles minor floating-point variance and considers nearby parallel streets as equivalent.
+      const tolerance = 10; // meters
+      const candidatesAtClosestDistance = foundAddresses.filter(
+        (addr) => Math.abs(addr.distance - closestDistance) <= tolerance
+      );
+
+      // Among tied candidates, prefer by road type priority (street > private road > highway, etc).
+      // This ensures PRIVATE_ROAD is chosen over MAJOR_HIGHWAY if both are equally close.
+      const best = _.sortBy(candidatesAtClosestDistance, (addr) => getRoadTypePriority(addr.segment.roadType))[0];
+
+      const addr = getSegmentAddress(best.segment);
+      logDev('Address found - segment:', best.segment.id, 'street:', addr.street?.name, 'roadType:', best.segment.roadType, 'distance:', best.distance.toFixed(1) + 'm');
+      inferredAddress = addr;
+    }
+
     return inferredAddress;
   } // END inferAddress function
 
@@ -10899,14 +10903,12 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
    * @param {Object} address Object containing country, state, city, street, houseNumber properties (IDs/names as required by SDK).
    */
   function updateAddress(feature, address) {
-    logDev('updateAddress called with:', { feature: feature?.id, street: address?.street?.name });
     if (!feature || !address || !address.street?.id) {
       logDev('updateAddress: missing feature, address, or street ID');
       return;
     }
 
     try {
-      logDev('updateAddress: calling SDK updateAddress with streetId:', address.street.id);
       sdk.DataModel.Venues.updateAddress({
         venueId: feature.id,
         streetId: address.street.id,
