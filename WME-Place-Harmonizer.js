@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        WME Place Harmonizer Beta
 // @namespace   WazeUSA
-// @version     2026.05.07.00
+// @version     2026.05.08.00
 // @description Harmonizes, formats, and locks a selected place
 // @author      WMEPH Development Group
 // @include      https://www.waze.com/editor*
@@ -47,6 +47,7 @@
     'v 2026.05.06.01 : Fixed: Address inference: accurate distance calculation & optimized node-based search',
     'v 2026.05.06.02 : Fixed venues with Lock levels below regional standards to use strokeDashstyle',
     'v 2026.05.07.00 : Fixed: Parking lot detection & polygon dashed stroke styling for severity highlights',
+    'v 2026.05.08.00 : Fixed: Indiana liquor store bug!',
   ];
 
   // **************************************************************************************************************
@@ -3106,7 +3107,7 @@
         return (
           !args.highlightOnly &&
           !this.isWhitelisted(args) &&
-          !args.categories.includes(RESIDENCE) &&
+          !args.categories.includes('RESIDENTIAL') &&
           args.addr?.state.name === 'Indiana' &&
           /\b(beers?|wines?|liquors?|spirits)\b/i.test(args.nameBase) &&
           !args.openingHours.some((entry) => entry.days.includes(0))
@@ -10752,8 +10753,9 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       22: 6,  // ALLEY (lowest priority)
     };
     // Excluded road types (non-addressable/non-drivable): freeways, ramps, walkways, railroads,
-    // pedestrian paths, ferries, parking lot roads, and other non-street segments.
-    const IGNORE_ROAD_TYPES = [3, 4, 5, 8, 9, 10, 15, 16, 18, 19, 20];
+    // pedestrian paths, ferries, and other non-street segments.
+    // NOTE: Parking lot roads (18) are traversable for connectivity but won't be selected as final addresses.
+    const IGNORE_ROAD_TYPES = [3, 4, 5, 8, 9, 10, 15, 16, 19, 20];
     let inferredAddress = {
       country: null,
       city: null,
@@ -10771,6 +10773,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       segments = [];
       nodes = [];
     }
+
 
     let stopPoint;
 
@@ -10862,26 +10865,29 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       stopPoint = centroid;
     }
 
-    // Find the map node closest to venue (point-to-point distance is O(n) but faster than
-    // testing point-to-line distance for all segments; this is the best starting point for traversal).
+    // Find the closest node that's ACTUALLY part of the valid segment network.
+    // Don't search among all nodes—only those in segmentsByNode (which have valid segments).
     let closestNode = null;
     let minDistance = Infinity;
     const ptCoords = [stopPoint.longitude || stopPoint[0], stopPoint.latitude || stopPoint[1]];
 
-    for (const node of nodes) {
-      const dist = calculatePointDistance(ptCoords, node.geometry.coordinates);
-      if (dist < minDistance) {
-        minDistance = dist;
-        closestNode = node;
+    for (const nodeId of segmentsByNode.keys()) {
+      const node = nodes.find(n => n.id === nodeId);
+      if (node) {
+        const dist = calculatePointDistance(ptCoords, node.geometry.coordinates);
+        if (dist < minDistance) {
+          minDistance = dist;
+          closestNode = node;
+        }
       }
     }
 
     if (!closestNode) {
-      logDev('inferAddress: No closest node found');
+      logDev('inferAddress: No starting node found in segment network');
       return inferredAddress;
     }
 
-    // Start recursive search from closest node, expanding outward through connected segments.
+    // Start recursive search from closest valid node, expanding outward through connected segments.
     findConnections(closestNode.id, 1);
 
     if (foundAddresses.length > 0) {
