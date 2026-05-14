@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        WME Place Harmonizer Beta
 // @namespace   WazeUSA
-// @version     2026.05.08.01
+// @version     2026.05.14.00
 // @description Harmonizes, formats, and locks a selected place
 // @author      WMEPH Development Group
 // @include      https://www.waze.com/editor*
@@ -40,12 +40,9 @@
   // **************************************************************************************************************
   const SHOW_UPDATE_MESSAGE = true;
   const SCRIPT_UPDATE_MESSAGE = [
-    'v 2026.05.06.00 : Fixed: Only test for missing Navagation points on PLA',
-    'v 2026.05.06.01 : Fixed: Address inference: accurate distance calculation & optimized node-based search',
-    'v 2026.05.06.02 : Fixed venues with Lock levels below regional standards to use strokeDashstyle',
-    'v 2026.05.07.00 : Fixed: Parking lot detection & polygon dashed stroke styling for severity highlights',
     'v 2026.05.08.00 : Fixed: Indiana liquor store bug!',
     'v 2026.05.08.01 : Fixed: Remove artificial PARKING_LOT category injection based on services',
+    'v 2026.05.14.00 : Fixed: Global category string conversion & address inference improvements',
   ];
 
   // **************************************************************************************************************
@@ -364,25 +361,25 @@
     ...COLLEGE_ABBREVIATIONS,
   ];
   // These arrays are populated lazily after CAT is initialized
-  const getPrimaryCatsToIgnoreMissingPhoneUrl = () => [CAT.ISLAND, CAT.SEA_LAKE_POOL, CAT.RIVER_STREAM, CAT.CANAL, CAT.JUNCTION_INTERCHANGE, CAT.SCENIC_LOOKOUT_VIEWPOINT];
-  const getPrimaryCatsToFlagGreenMissingPhoneUrl = () => [CAT.BRIDGE, CAT.FOREST_GROVE, CAT.DAM, CAT.TUNNEL, CAT.CEMETERY];
-  const getAnyCatsToFlagGreenMissingPhoneUrl = () => [CAT.REST_AREAS];
+  const getPrimaryCatsToIgnoreMissingPhoneUrl = () => ['ISLAND', 'SEA_LAKE_POOL', 'RIVER_STREAM', 'CANAL', 'JUNCTION_INTERCHANGE', 'SCENIC_LOOKOUT_VIEWPOINT', 'SWAMP_MARSH'];
+  const getPrimaryCatsToFlagGreenMissingPhoneUrl = () => ['BRIDGE', 'FOREST_GROVE', 'DAM', 'TUNNEL', 'CEMETERY'];
+  const getAnyCatsToFlagGreenMissingPhoneUrl = () => ['REST_AREAS'];
   const REGIONS_THAT_WANT_PLA_PHONE_URL = ['SER'];
   const getChainApprovalPrimaryCatsToIgnore = () => [
-    CAT.POST_OFFICE,
-    CAT.BRIDGE,
-    CAT.FOREST_GROVE,
-    CAT.DAM,
-    CAT.TUNNEL,
-    CAT.CEMETERY,
-    CAT.ISLAND,
-    CAT.SEA_LAKE_POOL,
-    CAT.RIVER_STREAM,
-    CAT.CANAL,
-    CAT.JUNCTION_INTERCHANGE,
-    CAT.SCENIC_LOOKOUT_VIEWPOINT,
+    'POST_OFFICE',
+    'BRIDGE',
+    'FOREST_GROVE',
+    'DAM',
+    'TUNNEL',
+    'CEMETERY',
+    'ISLAND',
+    'SEA_LAKE_POOL',
+    'SWAMP_MARSH',
+    'RIVER_STREAM',
+    'CANAL',
+    'JUNCTION_INTERCHANGE',
+    'SCENIC_LOOKOUT_VIEWPOINT',
   ];
-  const getCatsThatDontNeedNames = () => [CAT.SEA_LAKE_POOL];
   const BAD_URL = 'badURL';
   const BAD_PHONE = 'badPhone';
   // Feeds that are not in use and it's safe to delete the place. Use regex.
@@ -1582,7 +1579,7 @@
   }
 
   function isRestArea(venue) {
-    return venue.categories.includes(CAT.REST_AREAS) && /rest\s*area/i.test(venue.name);
+    return venue.categories.includes('REST_AREAS') && /rest\s*area/i.test(venue.name);
   }
 
   /**
@@ -1648,6 +1645,17 @@
   function isVenuePoint(venue) {
     if (!venue || !venue.geometry) return false;
     return venue.geometry.type === 'Point';
+  }
+
+  function isCategoryConfiguredAsArea(category, pnhCategoryInfos, regionCode) {
+    if (!pnhCategoryInfos) return false;
+    const categoryInfo = pnhCategoryInfos.getById(category);
+    if (!categoryInfo) return false;
+    // Regional override takes precedence
+    if (regionCode && categoryInfo.regArea?.includes(regionCode)) {
+      return true;
+    }
+    return categoryInfo.area === '1';
   }
 
   /**
@@ -2174,7 +2182,7 @@
         }); // END ROW PROCESSING
 
         // Do any post-processing of row values here:
-        if (this.strMatchAny || this.primaryCategory === CAT.HOTEL) {
+        if (this.strMatchAny || this.primaryCategory === 'HOTEL') {
           // Space match uses custom string transformations: uppercase, strip AND/THE, remove non-alphanumerics
           this.spaceMatchList = [
             this.name
@@ -2250,17 +2258,17 @@
       const categoryInfo = this.primaryCategory;
       const appendWords = [];
       if (categoryInfo) {
-        if (categoryInfo.id === CAT.HOTEL) {
+        if (categoryInfo.id === 'HOTEL') {
           appendWords.push('HOTEL');
-        } else if (categoryInfo.id === CAT.BANK_FINANCIAL && !this.notABank) {
+        } else if (categoryInfo.id === 'BANK_FINANCIAL' && !this.notABank) {
           appendWords.push('BANK', 'ATM');
-        } else if (categoryInfo.id === CAT.SUPERMARKET_GROCERY) {
+        } else if (categoryInfo.id === 'SUPERMARKET_GROCERY') {
           appendWords.push('SUPERMARKET');
-        } else if (categoryInfo.id === CAT.GYM_FITNESS) {
+        } else if (categoryInfo.id === 'GYM_FITNESS') {
           appendWords.push('GYM');
-        } else if (categoryInfo.id === CAT.GAS_STATION) {
+        } else if (categoryInfo.id === 'GAS_STATION') {
           appendWords.push('GAS', 'GASOLINE', 'FUEL', 'STATION', 'GASSTATION');
-        } else if (categoryInfo.id === CAT.CAR_RENTAL) {
+        } else if (categoryInfo.id === 'CAR_RENTAL') {
           appendWords.push('RENTAL', 'RENTACAR', 'CARRENTAL', 'RENTALCAR');
         }
         appendWords.forEach((word) => {
@@ -2295,7 +2303,7 @@
       // Name Matching
       if (this.regexNameMatch) {
         nameMatch = this.regexNameMatch.test(venue.name);
-      } else if (this.strMatchAny || this.primaryCategory === CAT.HOTEL) {
+      } else if (this.strMatchAny || this.primaryCategory === 'HOTEL') {
         // Match any part of WME name with either the PNH name or any spaced names
         matchInfo.allowMultiMatch = true; // TODO: This can probably be removed
 
@@ -2331,7 +2339,7 @@
         let PNHForceCat = this.forceCategoryMatching; // Primary category of PNH data
 
         // Gas stations only harmonized if the WME place category is already gas station (prevents Costco Gas becoming Costco Store)
-        if (categories[0] === CAT.GAS_STATION || PNHPriCat === CAT.GAS_STATION) {
+        if (categories[0] === 'GAS_STATION' || PNHPriCat === 'GAS_STATION') {
           PNHForceCat = Pnh.ForceCategoryMatchingType.PRIMARY;
         }
 
@@ -2536,6 +2544,7 @@
     static async downloadAllData() {
       await this.downloadPnhData();
       await this.#downloadPnhModerators();
+      logDev(`✓ All PNH categories loaded: USA=${Object.keys(PNH_DATA.USA.categoryInfos.toArray()).length}, CAN=${Object.keys(PNH_DATA.CAN.categoryInfos.toArray()).length}`);
     }
 
     static downloadPnhData() {
@@ -2560,6 +2569,10 @@
                   .replace(/[^A-z0-9,]/g, '')
                   .split(','),
               );
+
+            logDev('Creating USA Country - category data column 3');
+            const usaCategoryData = Pnh.processImportedDataColumn(values, 3);
+            logDev('USA category rows:', usaCategoryData.length);
 
             PNH_DATA.USA = new Country('USA', 'USA', values, 3, 0, {
               NWR: new Region('NWR', '1hv5hXBlGr1pTMmo4n3frUx1DovUODbZodfDBwwTc7HE'),
@@ -2754,6 +2767,21 @@
                 throw new Error(`WMEPH: Unexpected category data from PNH sheet: ${headerValue}`);
             }
           });
+
+          // Debug output for specific categories
+          if (categoryInfo.name === 'RIVER_STREAM' || categoryInfo.name === 'ISLAND') {
+            log(`Parsed ${categoryInfo.name}:`, {
+              id: categoryInfo.id,
+              name: categoryInfo.name,
+              parent: categoryInfo.parent,
+              point: categoryInfo.point,
+              area: categoryInfo.area,
+              regPoint: categoryInfo.regPoint,
+              regArea: categoryInfo.regArea,
+              services: categoryInfo.services
+            });
+          }
+
           categoryInfos.add(categoryInfo);
         }
       });
@@ -2926,49 +2954,67 @@
 
       static eval(args) {
         let result = null;
-        if (!args.highlightOnly) {
-          if (!args.addr.state || !args.addr.country || !args.addr.street?.name || !args.addr.city?.name) {
-            if (sdk.Map.getZoomLevel() < 4) {
-              if ($('#WMEPH-EnableIAZoom').prop('checked')) {
-                const coords = getVenueLonLat(args.venue);
-                sdk.Map.setMapCenter({ lonLat: coords, zoomLevel: 5 });
-              } else {
-                WazeWrap.Alerts.error(
-                  SCRIPT_NAME,
-                  'No address and the state cannot be determined. Please zoom in and rerun the script. ' + 'You can enable autozoom for this type of case in the options.',
-                );
-              }
-              result = { exit: true }; // Don't bother returning a Flag. This will exit the rest of the harmonizePlaceGo function.
-            } else {
-              let inferredAddress = inferAddress(args.venue, 7); // Pull address info from nearby segments
 
-              if (inferredAddress?.street?.id && inferredAddress?.state && inferredAddress?.country) {
-                if ($('#WMEPH-AddAddresses').prop('checked')) {
-                  // update the venue's address if option is enabled
-                  updateAddress(args.venue, inferredAddress, args.actions);
-                  UPDATED_FIELDS.address.updated = true;
-                  result = new this(inferredAddress);
-                } else if (![CAT.JUNCTION_INTERCHANGE].includes(args.categories[0]) && !FlagBase.currentFlags.hasFlag(Flag.CityMissing)) {
-                  new Flag.CityMissing(args);
+        // Detect if user intentionally set city to "None"
+        // When city is set to "None", WME assigns it placeholder id=999909
+        const cityIsIntentionallyEmpty = args.addr.city?.id === 999909;
+
+        // Only attempt address inference if the venue should have street/city information
+        // StreetMissing and CityMissing already have all the logic to determine this
+        const shouldHaveStreet = Flag.StreetMissing.venueIsFlaggable(args);
+        const shouldHaveCity = Flag.CityMissing.venueIsFlaggable(args);
+        const shouldInferAddress = shouldHaveStreet || shouldHaveCity;
+
+        const hasMissingAddress = !args.addr.state || !args.addr.country || !args.addr.street?.name || !args.addr.city?.name;
+
+        if (!args.highlightOnly) {
+          if (hasMissingAddress && shouldInferAddress) {
+            // Only infer if venue type should have address info (not a natural feature, bridge, etc.)
+            if (cityIsIntentionallyEmpty) {
+              // Don't auto-infer; user made an intentional choice
+              result = null;
+            } else {
+              if (sdk.Map.getZoomLevel() < 4) {
+                if ($('#WMEPH-EnableIAZoom').prop('checked')) {
+                  const coords = getVenueLonLat(args.venue);
+                  sdk.Map.setMapCenter({ lonLat: coords, zoomLevel: 5 });
+                } else {
+                  WazeWrap.Alerts.error(
+                    SCRIPT_NAME,
+                    'No address and the state cannot be determined. Please zoom in and rerun the script. ' + 'You can enable autozoom for this type of case in the options.',
+                  );
                 }
-              } else {
-                //  if the inference doesn't work...
-                WazeWrap.Alerts.error(SCRIPT_NAME, 'This place has no address data and the address cannot be inferred from nearby segments. Please edit the address and run WMEPH again.');
                 result = { exit: true }; // Don't bother returning a Flag. This will exit the rest of the harmonizePlaceGo function.
+              } else {
+                let inferredAddress = inferAddress(args.venue, 7); // Pull address info from nearby segments
+
+                if (inferredAddress?.street?.id && inferredAddress?.state && inferredAddress?.country) {
+                  if ($('#WMEPH-AddAddresses').prop('checked')) {
+                    // update the venue's address if option is enabled
+                    updateAddress(args.venue, inferredAddress, args.actions);
+                    UPDATED_FIELDS.address.updated = true;
+                    result = new this(inferredAddress);
+                  } else if (!['JUNCTION_INTERCHANGE'].includes(args.categories[0]) && !FlagBase.currentFlags.hasFlag(Flag.CityMissing)) {
+                    new Flag.CityMissing(args);
+                  }
+                } else {
+                  //  if the inference doesn't work...
+                  WazeWrap.Alerts.error(SCRIPT_NAME, 'This place has no address data and the address cannot be inferred from nearby segments. Please edit the address and run WMEPH again.');
+                  result = { exit: true }; // Don't bother returning a Flag. This will exit the rest of the harmonizePlaceGo function.
+                }
               }
             }
           }
-        } else if (!args.addr.state || !args.addr.country || !args.addr.street?.name || !args.addr.city?.name) {
-          // only highlighting
+        } else if (hasMissingAddress && shouldInferAddress) {
+          // only highlighting (and only if venue should have address info)
           result = { exit: true };
           if (args.venue.adLocked) {
             result.severity = 'adLock';
           } else {
             const cat = args.venue.categories;
-            if (containsAny(cat, [CAT.HOSPITAL_MEDICAL_CARE, CAT.HOSPITAL_URGENT_CARE, CAT.GAS_STATION])) {
-              logDev('Unaddressed HUC/GS');
+            if (containsAny(cat, ['HOSPITAL_MEDICAL_CARE', 'HOSPITAL_URGENT_CARE', 'GAS_STATION'])) {
               result.severity = SEVERITY.PINK;
-            } else if (cat.includes(CAT.JUNCTION_INTERCHANGE)) {
+            } else if (cat.includes('JUNCTION_INTERCHANGE')) {
               result.severity = SEVERITY.GREEN;
             } else {
               result.severity = SEVERITY.RED;
@@ -2983,13 +3029,12 @@
       static defaultMessage = 'Name is missing.';
 
       static venueIsFlaggable(args) {
-        return (
-          !args.categories.includes(CAT.RESIDENCE_HOME) &&
-          !args.categories.includes('RESIDENTIAL') && // SDK residential category
-          !args.nameBase?.replace(/[^A-Za-z0-9]/g, '') &&
-          ![CAT.ISLAND, CAT.FOREST_GROVE, CAT.SEA_LAKE_POOL, CAT.RIVER_STREAM, CAT.CANAL, 'PARKING_LOT'].includes(args.categories[0]) &&
-          !(args.categories.includes(CAT.GAS_STATION) && args.brand)
-        );
+        const EXCLUDED_FIRST_CATEGORIES = ['ISLAND', 'FOREST_GROVE', 'SEA_LAKE_POOL', 'RIVER_STREAM', 'CANAL', 'PARKING_LOT', 'NATURAL_FEATURES', 'SWAMP_MARSH'];
+        const hasAlphanumericName = args.nameBase?.replace(/[^A-Za-z0-9]/g, '').length > 0;
+        const isResidential = args.categories.includes('RESIDENCE_HOME') || args.categories.includes('RESIDENTIAL');
+        const isBrandedGasStation = args.categories.includes('GAS_STATION') && args.brand;
+
+        return !isResidential && !hasAlphanumericName && !EXCLUDED_FIRST_CATEGORIES.includes(args.categories[0]) && !isBrandedGasStation;
       }
     },
     GasNameMissing: class extends ActionFlag {
@@ -3002,7 +3047,7 @@
       }
 
       static venueIsFlaggable(args) {
-        return args.categories.includes(CAT.GAS_STATION) && isNullOrWhitespace(args.nameBase) && !isNullOrWhitespace(args.brand);
+        return args.categories.includes('GAS_STATION') && isNullOrWhitespace(args.nameBase) && !isNullOrWhitespace(args.brand);
       }
 
       action() {
@@ -3015,7 +3060,7 @@
       // Use this to highlight yellow any venues that have an invalid value and will be
       // auto-corrected when WMEPH is run.
       static venueIsFlaggable(args) {
-        return args.categories.includes(CAT.CHARGING_STATION) && args.url && ['https://www.nissan-europe.com/', 'https://www.eco-movement.com/'].includes(args.url);
+        return args.categories.includes('CHARGING_STATION') && args.url && ['https://www.nissan-europe.com/', 'https://www.eco-movement.com/'].includes(args.url);
       }
     },
     ClearThisPhone: class extends FlagBase {
@@ -3024,7 +3069,7 @@
       // Use this to highlight yellow any venues that have an invalid value and will be
       // auto-corrected when WMEPH is run.
       static venueIsFlaggable(args) {
-        return args.categories.includes(CAT.CHARGING_STATION) && args.phone === '+33-1-72676914'; // Nissan Europe ph#
+        return args.categories.includes('CHARGING_STATION') && args.phone === '+33-1-72676914'; // Nissan Europe ph#
       }
     },
     PlaIsPublic: class extends FlagBase {
@@ -3128,7 +3173,7 @@
       get noLock() {
         return Flag.UnmappedRegion.#getRareCategoryInfos(this.args).some(
           (categoryInfo) =>
-            (categoryInfo.id === CAT.OTHER && Flag.UnmappedRegion.#regionsToFlagOther.includes(this.args.regionCode) && !this.args.isLocked) || !Flag.UnmappedRegion.isWhitelisted(this.args),
+            (categoryInfo.id === 'OTHER' && Flag.UnmappedRegion.#regionsToFlagOther.includes(this.args.regionCode) && !this.args.isLocked) || !Flag.UnmappedRegion.isWhitelisted(this.args),
         );
       }
 
@@ -3141,7 +3186,7 @@
         let addOtherMessage = false;
 
         Flag.UnmappedRegion.#getRareCategoryInfos(args).forEach((categoryInfo) => {
-          if (categoryInfo.id === CAT.OTHER) {
+          if (categoryInfo.id === 'OTHER') {
             if (Flag.UnmappedRegion.#regionsToFlagOther.includes(args.region) && !args.isLocked) {
               addOtherMessage = true;
               severity = Math.max(severity, SEVERITY.BLUE);
@@ -3179,7 +3224,7 @@
       }
 
       static venueIsFlaggable(args) {
-        return !args.categories.includes(CAT.REST_AREAS) && !!this.#getRareCategoryInfos(args).length;
+        return !args.categories.includes('REST_AREAS') && !!this.#getRareCategoryInfos(args).length;
       }
 
       static #getRareCategoryInfos(args) {
@@ -3190,7 +3235,7 @@
           .filter((pnhCategoryInfo) => {
             const rareLocalities = pnhCategoryInfo.rare;
             if (rareLocalities.includes(args.state2L) || rareLocalities.includes(args.region) || rareLocalities.includes(args.countryCode)) {
-              if (pnhCategoryInfo.id === CAT.OTHER && this.#regionsToFlagOther.includes(args.region)) {
+              if (pnhCategoryInfo.id === 'OTHER' && this.#regionsToFlagOther.includes(args.region)) {
                 if (!args.isLocked) {
                   return true;
                 }
@@ -3209,7 +3254,7 @@
       static defaultWLTooltip = 'Whitelist rest area name';
 
       static venueIsFlaggable(args) {
-        return args.countryCode === PNH_DATA.USA.countryCode && args.categories.includes(CAT.REST_AREAS) && !/^Rest Area.* - /.test(args.nameBase + (args.nameSuffix ?? ''));
+        return args.countryCode === PNH_DATA.USA.countryCode && args.categories.includes('REST_AREAS') && !/^Rest Area.* - /.test(args.nameBase + (args.nameSuffix ?? ''));
       }
     },
     RestAreaNoTransportation: class extends ActionFlag {
@@ -3218,12 +3263,12 @@
       static defaultButtonText = 'Remove it?';
 
       static venueIsFlaggable(args) {
-        return args.categories.includes(CAT.REST_AREAS) && args.categories.includes(CAT.TRANSPORTATION);
+        return args.categories.includes('REST_AREAS') && args.categories.includes('TRANSPORTATION');
       }
 
       action() {
         const categories = this.args.venue.categories.slice(); // create a copy
-        const index = categories.indexOf(CAT.TRANSPORTATION);
+        const index = categories.indexOf('TRANSPORTATION');
         if (index > -1) {
           categories.splice(index, 1); // remove the category
           addUpdateAction(this.args.venue, { categories }, null, true);
@@ -3237,7 +3282,7 @@
       static defaultMessage = 'Gas stations at Rest Areas should be separate area places.';
 
       static venueIsFlaggable(args) {
-        return args.categories.includes(CAT.REST_AREAS) && args.categories.includes(CAT.GAS_STATION);
+        return args.categories.includes('REST_AREAS') && args.categories.includes('GAS_STATION');
       }
     },
     RestAreaScenic: class extends WLActionFlag {
@@ -3248,12 +3293,12 @@
       static defaultButtonTooltip = 'Remove "Scenic Overlook" category.';
 
       static venueIsFlaggable(args) {
-        return !this.isWhitelisted(args) && args.categories.includes(CAT.REST_AREAS) && args.categories.includes(CAT.SCENIC_LOOKOUT_VIEWPOINT);
+        return !this.isWhitelisted(args) && args.categories.includes('REST_AREAS') && args.categories.includes('SCENIC_LOOKOUT_VIEWPOINT');
       }
 
       action() {
         const categories = this.args.venue.categories.slice(); // create a copy
-        const index = categories.indexOf(CAT.SCENIC_LOOKOUT_VIEWPOINT);
+        const index = categories.indexOf('SCENIC_LOOKOUT_VIEWPOINT');
         if (index > -1) {
           categories.splice(index, 1); // remove the category
           addUpdateAction(this.args.venue, { categories }, null, true);
@@ -3269,11 +3314,11 @@
       static defaultButtonTooltip = 'Update with proper categories and services.';
 
       static venueIsFlaggable(args) {
-        return !this.isWhitelisted(args) && !args.categories.includes(CAT.REST_AREAS) && /rest (?:area|stop)|service plaza/i.test(args.nameBase);
+        return !this.isWhitelisted(args) && !args.categories.includes('REST_AREAS') && /rest (?:area|stop)|service plaza/i.test(args.nameBase);
       }
 
       action() {
-        const categories = insertAtIndex(this.args.venue.categories, CAT.REST_AREAS, 0);
+        const categories = insertAtIndex(this.args.venue.categories, 'REST_AREAS', 0);
         // make it 24/7
         const openingHours = [new OpeningHour({ days: [1, 2, 3, 4, 5, 6, 0], fromHour: '00:00', toHour: '00:00' })];
         addUpdateAction(this.args.venue, { categories, openingHours }, null, true);
@@ -3285,7 +3330,7 @@
         '<a href="https://wazeopedia.waze.com/wiki/USA/Places/EV_charging_station" target="_blank">wazeopedia</a>.';
 
       static venueIsFlaggable(args) {
-        return !args.highlightOnly && args.categories.includes(CAT.CHARGING_STATION);
+        return !args.highlightOnly && args.categories.includes('CHARGING_STATION');
       }
     },
     EVCSAltNameMissing: class extends ActionFlag {
@@ -3295,7 +3340,7 @@
       static defaultButtonTooltip = 'Add EVCS alternate name';
 
       static venueIsFlaggable(args) {
-        if (!args.categories.includes(CAT.CHARGING_STATION)) return false;
+        if (!args.categories.includes('CHARGING_STATION')) return false;
         if (args.aliases.some((alias) => alias.toLowerCase() === 'ev charging station')) return false;
         if (args.venue.name.toLowerCase().includes('(private)')) return false;
         try {
@@ -3345,7 +3390,7 @@
       }
 
       static venueIsFlaggable(args) {
-        if (!args.categories.includes(CAT.CHARGING_STATION)) return false;
+        if (!args.categories.includes('CHARGING_STATION')) return false;
         try {
           const costType = sdk.DataModel.Venues.ChargingStation.getCostType({ venueId: args.venue.id });
           return !costType || costType === 'COST_TYPE_UNSPECIFIED';
@@ -3379,7 +3424,7 @@
       static venueIsFlaggable(args) {
         // For gas stations, check to make sure brand exists somewhere in the place name.
         // Remove non - alphanumeric characters first, for more relaxed matching.
-        if (args.categories[0] === CAT.GAS_STATION && args.brand) {
+        if (args.categories[0] === 'GAS_STATION' && args.brand) {
           const compressedName = (args.nameBase + args.nameSuffix ?? '').toUpperCase().replace(/[^a-zA-Z0-9]/g, '');
           // Some brands may have more than one acceptable name, or the brand listed in WME doesn't match what we want to see in the name.
           // Ideally, this would be addressed in the PNH spreadsheet somehow, but for now hardcoding is the only option.
@@ -3406,7 +3451,7 @@
       static defaultMessage = '"Unbranded" should not be used for the station brand. Change to the correct brand or delete the brand.';
 
       static venueIsFlaggable(args) {
-        return args.categories.includes(CAT.GAS_STATION) && args.brand === 'Unbranded';
+        return args.categories.includes('GAS_STATION') && args.brand === 'Unbranded';
       }
     },
     GasMkPrim: class extends ActionFlag {
@@ -3416,12 +3461,12 @@
       static defaultButtonTooltip = 'Make the Gas Station category the primary category.';
 
       static venueIsFlaggable(args) {
-        return args.categories.indexOf(CAT.GAS_STATION) > 0;
+        return args.categories.indexOf('GAS_STATION') > 0;
       }
 
       action() {
         // Move Gas category to the first position
-        const categories = insertAtIndex(this.args.venue.categories, CAT.GAS_STATION, 0);
+        const categories = insertAtIndex(this.args.venue.categories, GAS_STATION, 0);
         addUpdateAction(this.args.venue, { categories }, null, true);
       }
     },
@@ -3446,12 +3491,12 @@
       static defaultWLTooltip = 'Whitelist hotel as secondary category';
 
       static venueIsFlaggable(args) {
-        return args.priPNHPlaceCat === CAT.HOTEL && args.categories.indexOf(CAT.HOTEL) !== 0;
+        return args.priPNHPlaceCat === 'HOTEL' && args.categories.indexOf('HOTEL') !== 0;
       }
 
       action() {
         // Insert/move Hotel category in the first position
-        const categories = insertAtIndex(this.args.venue.categories.slice(), CAT.HOTEL, 0);
+        const categories = insertAtIndex(this.args.venue.categories.slice(), 'HOTEL', 0);
         addUpdateAction(this.args.venue, { categories }, null, true);
       }
     },
@@ -3468,7 +3513,7 @@
           const testName = name.toLowerCase().replace(/[^a-z]/g, ' ');
           const testNameWords = testName.split(' ');
           if (
-            (args.categories.includes(CAT.HOSPITAL_URGENT_CARE) || args.categories.includes(CAT.DOCTOR_CLINIC)) &&
+            (args.categories.includes('HOSPITAL_URGENT_CARE') || args.categories.includes('DOCTOR_CLINIC')) &&
             (containsAny(testNameWords, Pnh.ANIMAL_FULL_MATCH) || Pnh.ANIMAL_PART_MATCH.some((match) => testName.includes(match)))
           ) {
             return true;
@@ -3481,8 +3526,8 @@
         let updated = false;
         let categories = uniq(this.args.venue.categories.slice());
         categories.forEach((cat, idx) => {
-          if (cat === CAT.HOSPITAL_URGENT_CARE || cat === CAT.DOCTOR_CLINIC) {
-            categories[idx] = CAT.PET_STORE_VETERINARIAN_SERVICES;
+          if (cat === 'HOSPITAL_URGENT_CARE' || cat === 'DOCTOR_CLINIC') {
+            categories[idx] = 'PET_STORE_VETERINARIAN_SERVICES';
             updated = true;
           }
         });
@@ -3503,7 +3548,7 @@
           const testName = args.nameBase.toLowerCase().replace(/[^a-z]/g, ' ');
           const testNameWords = testName.split(' ');
 
-          if (args.categories.includes(CAT.SCHOOL) && (containsAny(testNameWords, Pnh.SCHOOL_FULL_MATCH) || Pnh.SCHOOL_PART_MATCH.some((match) => testName.includes(match)))) {
+          if (args.categories.includes('SCHOOL') && (containsAny(testNameWords, Pnh.SCHOOL_FULL_MATCH) || Pnh.SCHOOL_PART_MATCH.some((match) => testName.includes(match)))) {
             return true;
           }
         }
@@ -3542,7 +3587,14 @@
       }
 
       static venueIsFlaggable(args) {
-        return !isVenuePoint(args.venue) && (args.categories.includes(CAT.RESIDENCE_HOME) || (args.maxAreaSeverity > SEVERITY.BLUE && !args.categories.includes(CAT.REST_AREAS)));
+        // Check if any category is configured in PNH data as an area
+        const hasCategoryConfiguredAsArea = args.categories.some(cat =>
+          isCategoryConfiguredAsArea(cat, args.pnhCategoryInfos, args.regionCode)
+        );
+        if (hasCategoryConfiguredAsArea) {
+          return false;
+        }
+        return !isVenuePoint(args.venue) && (args.categories.includes('RESIDENCE_HOME') || (args.maxAreaSeverity > SEVERITY.BLUE && !args.categories.includes('REST_AREAS')));
       }
 
       action() {
@@ -3600,7 +3652,14 @@
       }
 
       static venueIsFlaggable(args) {
-        return isVenuePoint(args.venue) && (args.maxPointSeverity > SEVERITY.GREEN || args.categories.includes(CAT.REST_AREAS));
+        // If category is configured as area in PNH data, flag point venues
+        const hasCategoryConfiguredAsArea = args.categories.some(cat =>
+          isCategoryConfiguredAsArea(cat, args.pnhCategoryInfos, args.regionCode)
+        );
+        if (hasCategoryConfiguredAsArea) {
+          return isVenuePoint(args.venue);
+        }
+        return isVenuePoint(args.venue) && (args.maxPointSeverity > SEVERITY.GREEN || args.categories.includes('REST_AREAS'));
       }
 
       static #hasCollegeInName(name) {
@@ -3640,7 +3699,6 @@
       static defaultButtonTooltip = 'Add HN to place';
       static WL_KEY = 'HNWL';
       static defaultWLTooltip = 'Whitelist empty HN';
-      static #CATEGORIES_TO_IGNORE = [CAT.BRIDGE, CAT.ISLAND, CAT.FOREST_GROVE, CAT.SEA_LAKE_POOL, CAT.RIVER_STREAM, CAT.CANAL, CAT.DAM, CAT.TUNNEL, CAT.JUNCTION_INTERCHANGE];
 
       static #TEXTBOX_ID = 'WMEPH-HNAdd';
       noBannerAssemble = true;
@@ -3662,7 +3720,7 @@
         let showWL = true;
         let severity = SEVERITY.RED;
         let noLock = false;
-        if (args.state2L === 'PR' || args.categories[0] === CAT.SCENIC_LOOKOUT_VIEWPOINT) {
+        if (args.state2L === 'PR' || args.categories[0] === 'SCENIC_LOOKOUT_VIEWPOINT') {
           severity = SEVERITY.GREEN;
           showWL = false;
         } else if (args.categories.includes('PARKING_LOT')) {
@@ -3687,7 +3745,10 @@
       }
 
       static venueIsFlaggable(args) {
-        return args.hasStreet && args.hasCity && !args.currentHN?.replace(/\D/g, '') && !this.#CATEGORIES_TO_IGNORE.includes(args.categories[0]) && !args.categories.includes(CAT.REST_AREAS);
+        const CATEGORIES_TO_IGNORE = ['BRIDGE', 'ISLAND', 'FOREST_GROVE', 'SEA_LAKE_POOL', 'RIVER_STREAM', 'CANAL', 'DAM', 'TUNNEL', 'JUNCTION_INTERCHANGE', 'SWAMP_MARSH', 'NATURAL_FEATURES'];
+        const hasNoHN = !args.currentHN?.replace(/\D/g, '');
+        const isRestArea = args.categories.includes('REST_AREAS');
+        return args.hasStreet && args.hasCity && hasNoHN && !CATEGORIES_TO_IGNORE.includes(args.categories[0]) && !isRestArea;
       }
 
       static #getTextbox() {
@@ -3790,17 +3851,18 @@
 
       constructor(args) {
         super();
-        if (args.categories[0] === CAT.SCENIC_LOOKOUT_VIEWPOINT) {
+        if (args.categories[0] === 'SCENIC_LOOKOUT_VIEWPOINT') {
           this.severity = SEVERITY.BLUE;
         }
       }
 
       static venueIsFlaggable(args) {
+        const CATEGORIES_TO_IGNORE = ['BRIDGE', 'ISLAND', 'FOREST_GROVE', 'SEA_LAKE_POOL', 'RIVER_STREAM', 'CANAL', 'DAM', 'TUNNEL', 'JUNCTION_INTERCHANGE', 'NATURAL_FEATURES'];
         return (
           args.addr.city &&
           (!args.addr.street || args.addr.street.isEmpty) &&
-          ![CAT.BRIDGE, CAT.ISLAND, CAT.FOREST_GROVE, CAT.SEA_LAKE_POOL, CAT.RIVER_STREAM, CAT.CANAL, CAT.DAM, CAT.TUNNEL, CAT.JUNCTION_INTERCHANGE].includes(args.categories[0]) &&
-          !args.categories.includes(CAT.REST_AREAS)
+          !CATEGORIES_TO_IGNORE.includes(args.categories[0]) &&
+          !args.categories.includes('REST_AREAS')
         );
       }
 
@@ -3828,16 +3890,17 @@
 
       constructor(args) {
         super();
-        if (args.categories.includes(CAT.RESIDENCE_HOME) && args.highlightOnly) {
+        if (args.categories.includes('RESIDENCE_HOME') && args.highlightOnly) {
           this.severity = SEVERITY.BLUE;
         }
       }
 
       static venueIsFlaggable(args) {
+        const CATEGORIES_TO_IGNORE = ['BRIDGE', 'ISLAND', 'FOREST_GROVE', 'SEA_LAKE_POOL', 'RIVER_STREAM', 'CANAL', 'DAM', 'TUNNEL', 'JUNCTION_INTERCHANGE', 'NATURAL_FEATURES'];
         return (
           (!args.addr.city || args.addr.city.isEmpty) &&
-          ![CAT.BRIDGE, CAT.ISLAND, CAT.FOREST_GROVE, CAT.SEA_LAKE_POOL, CAT.RIVER_STREAM, CAT.CANAL, CAT.DAM, CAT.TUNNEL, CAT.JUNCTION_INTERCHANGE].includes(args.categories[0]) &&
-          !args.categories.includes(CAT.REST_AREAS)
+          !CATEGORIES_TO_IGNORE.includes(args.categories[0]) &&
+          !args.categories.includes('REST_AREAS')
         );
       }
 
@@ -3863,7 +3926,7 @@
 
       static venueIsFlaggable(args) {
         return (
-          (!args.pnhNameRegMatch || (args.pnhNameRegMatch && args.priPNHPlaceCat === CAT.BANK_FINANCIAL && !args.pnhMatch.notABank)) && args.categories[0] === CAT.OFFICES && /\batm\b/i.test(name)
+          (!args.pnhNameRegMatch || (args.pnhNameRegMatch && args.priPNHPlaceCat === 'BANK_FINANCIAL' && !args.pnhMatch.notABank)) && args.categories[0] === 'OFFICES' && /\batm\b/i.test(name)
         );
       }
     },
@@ -3876,10 +3939,10 @@
 
       static venueIsFlaggable(args) {
         let flaggable = false;
-        if (!args.priPNHPlaceCat || (args.priPNHPlaceCat === CAT.BANK_FINANCIAL && !args.pnhMatch.notABank)) {
-          const ixBank = args.categories.indexOf(CAT.BANK_FINANCIAL);
-          const ixATM = args.categories.indexOf(CAT.ATM);
-          const ixOffices = args.categories.indexOf(CAT.OFFICES);
+        if (!args.priPNHPlaceCat || (args.priPNHPlaceCat === 'BANK_FINANCIAL' && !args.pnhMatch.notABank)) {
+          const ixBank = args.categories.indexOf('BANK_FINANCIAL');
+          const ixATM = args.categories.indexOf('ATM');
+          const ixOffices = args.categories.indexOf('OFFICES');
 
           if (/\batm\b/gi.test(args.nameBase)) {
             flaggable = ixOffices === 0 || (ixBank === -1 && ixATM === -1) || (ixATM === 0 && ixBank > 0) || ixBank > -1;
@@ -3896,7 +3959,7 @@
         const newAttributes = {};
 
         const originalCategories = this.args.venue.categories;
-        const newCategories = insertAtIndex(originalCategories, [CAT.BANK_FINANCIAL, CAT.ATM], 0); // Change to bank and atm cats
+        const newCategories = insertAtIndex(originalCategories, ['BANK_FINANCIAL', 'ATM'], 0); // Change to bank and atm cats
         if (!arraysAreEqual(originalCategories, newCategories)) {
           newAttributes.categories = newCategories;
         }
@@ -3922,10 +3985,10 @@
 
       static venueIsFlaggable(args) {
         let flaggable = false;
-        if (!args.priPNHPlaceCat || (args.priPNHPlaceCat === CAT.BANK_FINANCIAL && !args.pnhMatch.notABank)) {
-          const ixBank = args.categories.indexOf(CAT.BANK_FINANCIAL);
-          const ixATM = args.categories.indexOf(CAT.ATM);
-          const ixOffices = args.categories.indexOf(CAT.OFFICES);
+        if (!args.priPNHPlaceCat || (args.priPNHPlaceCat === 'BANK_FINANCIAL' && !args.pnhMatch.notABank)) {
+          const ixBank = args.categories.indexOf('BANK_FINANCIAL');
+          const ixATM = args.categories.indexOf('ATM');
+          const ixOffices = args.categories.indexOf('OFFICES');
 
           if (/\batm\b/gi.test(args.nameBase)) {
             flaggable = ixOffices === 0 || (ixBank === -1 && ixATM === -1) || ixBank > -1;
@@ -3946,7 +4009,7 @@
           newAttributes.name = `${originalName} ATM`;
         }
 
-        const atmCategory = [CAT.ATM];
+        const atmCategory = ['ATM'];
         if (!arraysAreEqual(this.args.venue.categories, atmCategory)) {
           newAttributes.categories = atmCategory; // Change to ATM only
         }
@@ -3963,9 +4026,9 @@
       static venueIsFlaggable(args) {
         let flaggable = false;
         if (!args.priPNHPlaceCat) {
-          flaggable = /\batm\b/gi.test(args.nameBase) && args.categories.indexOf(CAT.OFFICES) === 0;
-        } else if (args.priPNHPlaceCat === CAT.BANK_FINANCIAL && !args.pnhMatch.notABank) {
-          flaggable = !containsAny(args.categories, [CAT.BANK_FINANCIAL, CAT.ATM]) && !/\bcorporate offices\b/i.test(args.nameSuffix);
+          flaggable = /\batm\b/gi.test(args.nameBase) && args.categories.indexOf('OFFICES') === 0;
+        } else if (args.priPNHPlaceCat === 'BANK_FINANCIAL' && !args.pnhMatch.notABank) {
+          flaggable = !containsAny(args.categories, ['BANK_FINANCIAL', 'ATM']) && !/\bcorporate offices\b/i.test(args.nameSuffix);
         }
         return flaggable;
       }
@@ -3973,7 +4036,7 @@
       action() {
         const newAttributes = {};
 
-        const officesCategory = [CAT.OFFICES];
+        const officesCategory = ['OFFICES'];
         if (!arraysAreEqual(this.args.venue.categories, officesCategory)) {
           newAttributes.categories = officesCategory;
         }
@@ -4009,7 +4072,7 @@
       static defaultMessage = 'Last edited by an IGN editor';
 
       static venueIsFlaggable(args) {
-        return !args.categories.includes(CAT.RESIDENCE_HOME) && args.venue.modificationData.updatedBy && /^ign_/i.test(args.venue.modificationData.updatedBy);
+        return !args.categories.includes('RESIDENCE_HOME') && args.venue.modificationData.updatedBy && /^ign_/i.test(args.venue.modificationData.updatedBy);
       }
     },
     WazeBot: class extends ActionFlag {
@@ -4021,7 +4084,7 @@
 
       static venueIsFlaggable(args) {
         const isUnchanged = !args.venue.isNew && !args.venue.modificationData.updatedBy;
-        let flaggable = isUnchanged && !args.categories.includes(CAT.RESIDENCE_HOME);
+        let flaggable = isUnchanged && !args.categories.includes('RESIDENCE_HOME');
         if (flaggable) {
           const lastUpdatedByName = args.venue.modificationData.updatedBy ?? args.venue.modificationData.createdBy;
           flaggable = this.#botNames.some((botName) => botName.test(lastUpdatedByName));
@@ -4103,11 +4166,11 @@
       }
 
       static #possiblyResidentialName(alphaName, categories) {
-        return /('?s|my)\s+(house|home|work)/i.test(alphaName) && !containsAny(categories, [CAT.RESTAURANT, CAT.DESSERT, CAT.BAR]);
+        return /('?s|my)\s+(house|home|work)/i.test(alphaName) && !containsAny(categories, ['RESTAURANT', 'DESSERT', 'BAR']);
       }
 
       static #isPreflaggable(args) {
-        return !args.categories.includes(CAT.RESIDENCE_HOME) && !args.pnhNameRegMatch && !this.isWhitelisted(args) && args.totalSeverity < SEVERITY.RED;
+        return !args.categories.includes('RESIDENCE_HOME') && !args.pnhNameRegMatch && !this.isWhitelisted(args) && args.totalSeverity < SEVERITY.RED;
       }
 
       // TODO
@@ -4212,7 +4275,7 @@
 
       static venueIsFlaggable(args) {
         // If gas station is missing brand, don't flag if place is locked as high as user can lock it.
-        return args.categories.includes(CAT.GAS_STATION) && !args.brand && args.venue.lockRank < args.levelToLock;
+        return args.categories.includes('GAS_STATION') && !args.brand && args.venue.lockRank < args.levelToLock;
       }
     },
     SubFuel: class extends WLFlag {
@@ -4247,7 +4310,7 @@
       }
 
       static venueIsFlaggable(args) {
-        if (args.categories.includes(CAT.CHARGING_STATION) && !this.isWhitelisted(args)) {
+        if (args.categories.includes('CHARGING_STATION') && !this.isWhitelisted(args)) {
           try {
             const network = sdk.DataModel.Venues.ChargingStation.getNetwork({ venueId: args.venue.id });
             if (!network || !COMMON_EV_PAYMENT_METHODS[network]) return false;
@@ -4324,7 +4387,7 @@
       }
 
       static venueIsFlaggable(args) {
-        if (args.categories.includes(CAT.CHARGING_STATION) && !this.isWhitelisted(args)) {
+        if (args.categories.includes('CHARGING_STATION') && !this.isWhitelisted(args)) {
           try {
             const network = sdk.DataModel.Venues.ChargingStation.getNetwork({ venueId: args.venue.id });
             if (!network || !COMMON_EV_PAYMENT_METHODS.hasOwnProperty(network)) return false;
@@ -4495,7 +4558,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       }
 
       static venueIsFlaggable(args) {
-        return args.priPNHPlaceCat === CAT.HOTEL && (args.nameBase + (args.nameSuffix || '')).toUpperCase() === args.pnhMatch.name.toUpperCase();
+        return args.priPNHPlaceCat === 'HOTEL' && (args.nameBase + (args.nameSuffix || '')).toUpperCase() === args.pnhMatch.name.toUpperCase();
       }
     },
     LocalizedName: class extends WLFlag {
@@ -4595,7 +4658,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       constructor(venue, pnhCategoryInfo, categories) {
         super();
         this.message = pnhCategoryInfo.message;
-        if (categories.includes(CAT.HOSPITAL_URGENT_CARE)) {
+        if (categories.includes('HOSPITAL_URGENT_CARE')) {
           this.buttonText = 'Change to Doctor/Clinic';
           this.actionType = 'changeToDoctorClinic';
         }
@@ -4613,9 +4676,9 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       action() {
         if (this.actionType === 'changeToDoctorClinic') {
           const categories = uniq(this.venue.categories.slice());
-          const indexOfHospital = categories.indexOf(CAT.HOSPITAL_URGENT_CARE);
+          const indexOfHospital = categories.indexOf('HOSPITAL_URGENT_CARE');
           if (indexOfHospital > -1) {
-            categories[indexOfHospital] = CAT.DOCTOR_CLINIC;
+            categories[indexOfHospital] = 'DOCTOR_CLINIC';
             addUpdateAction(this.venue, { categories }, null, true);
           }
         }
@@ -4623,7 +4686,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
     },
     ExtProviderMissing: class extends ActionFlag {
       static defaultButtonTooltip = 'If no other properties need to be updated, click to nudge the place (force an edit).';
-      static #categoriesToIgnore = [CAT.BRIDGE, CAT.TUNNEL, CAT.JUNCTION_INTERCHANGE, CAT.NATURAL_FEATURES, CAT.ISLAND, CAT.SEA_LAKE_POOL, CAT.RIVER_STREAM, CAT.CANAL, CAT.SWAMP_MARSH];
+      static #categoriesToIgnore = ['BRIDGE', 'TUNNEL', 'JUNCTION_INTERCHANGE', 'NATURAL_FEATURES', 'ISLAND', 'SEA_LAKE_POOL', 'RIVER_STREAM', 'CANAL', 'SWAMP_MARSH'];
 
       get message() {
         let msg = 'No Google link';
@@ -4904,21 +4967,22 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
 
       static venueIsFlaggable(args) {
         return !containsAny(args.categories, [
-          CAT.STADIUM_ARENA,
-          CAT.CEMETERY,
-          CAT.TRANSPORTATION,
-          CAT.FERRY_PIER,
-          CAT.SUBWAY_STATION,
-          CAT.BRIDGE,
-          CAT.TUNNEL,
-          CAT.JUNCTION_INTERCHANGE,
-          CAT.ISLAND,
-          CAT.SEA_LAKE_POOL,
-          CAT.RIVER_STREAM,
-          CAT.FOREST_GROVE,
-          CAT.CANAL,
-          CAT.SWAMP_MARSH,
-          CAT.DAM,
+          'STADIUM_ARENA',
+          'CEMETERY',
+          'TRANSPORTATION',
+          'FERRY_PIER',
+          'SUBWAY_STATION',
+          'BRIDGE',
+          'TUNNEL',
+          'JUNCTION_INTERCHANGE',
+          'ISLAND',
+          'SEA_LAKE_POOL',
+          'RIVER_STREAM',
+          'FOREST_GROVE',
+          'CANAL',
+          'SWAMP_MARSH',
+          'DAM',
+          'NATURAL_FEATURES',
         ]);
       }
 
@@ -4928,25 +4992,25 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
           args.openingHours.length ||
           $('#WMEPH-DisableHoursHL').prop('checked') ||
           containsAny(args.categories, [
-            CAT.SCHOOL,
-            CAT.CONVENTIONS_EVENT_CENTER,
-            CAT.CAMPING_TRAILER_PARK,
-            CAT.COTTAGE_CABIN,
-            CAT.COLLEGE_UNIVERSITY,
-            CAT.GOLF_COURSE,
-            CAT.SPORTS_COURT,
-            CAT.MOVIE_THEATER,
-            CAT.SHOPPING_CENTER,
-            CAT.RELIGIOUS_CENTER,
+            'SCHOOL',
+            'CONVENTIONS_EVENT_CENTER',
+            'CAMPING_TRAILER_PARK',
+            'COTTAGE_CABIN',
+            'COLLEGE_UNIVERSITY',
+            'GOLF_COURSE',
+            'SPORTS_COURT',
+            'MOVIE_THEATER',
+            'SHOPPING_CENTER',
+            'RELIGIOUS_CENTER',
             'PARKING_LOT',
-            CAT.PARK,
-            CAT.PLAYGROUND,
-            CAT.AIRPORT,
-            CAT.FIRE_DEPARTMENT,
-            CAT.POLICE_STATION,
-            CAT.SEAPORT_MARINA_HARBOR,
-            CAT.FARM,
-            CAT.SCENIC_LOOKOUT_VIEWPOINT,
+            'PARK',
+            'PLAYGROUND',
+            'AIRPORT',
+            'FIRE_DEPARTMENT',
+            'POLICE_STATION',
+            'SEAPORT_MARINA_HARBOR',
+            'FARM',
+            'SCENIC_LOOKOUT_VIEWPOINT',
           ])
         );
       }
@@ -5255,7 +5319,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
     OldHours: class extends ActionFlag {
       static defaultSeverity = SEVERITY.YELLOW;
       static #categoriesToCheck;
-      static #parentCategoriesToCheck = [CAT.SHOPPING_AND_SERVICES, CAT.FOOD_AND_DRINK, CAT.CULTURE_AND_ENTERTAINEMENT];
+      static #parentCategoriesToCheck = ['SHOPPING_AND_SERVICES', 'FOOD_AND_DRINK', 'CULTURE_AND_ENTERTAINEMENT'];
 
       get message() {
         let msg = 'Last updated over 3 years ago. Verify hours are correct.';
@@ -5652,7 +5716,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
 
       static venueIsFlaggable(args) {
         // Allow residential point locking by R3+
-        return !args.highlightOnly && (args.categories.includes(CAT.RESIDENCE_HOME) || args.categories.includes('RESIDENTIAL')) && (USER.isDevUser || USER.isBetaUser || USER.rank >= 3);
+        return !args.highlightOnly && (args.categories.includes('RESIDENCE_HOME') || args.categories.includes('RESIDENTIAL')) && (USER.isDevUser || USER.isBetaUser || USER.rank >= 3);
       }
 
       action() {
@@ -5726,11 +5790,11 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       static defaultButtonTooltip = 'Add Pharmacy category';
 
       static venueIsFlaggable(args) {
-        return args.pnhMatch.flagsToAdd?.addPharm && !args.categories.includes(CAT.PHARMACY);
+        return args.pnhMatch.flagsToAdd?.addPharm && !args.categories.includes('PHARMACY');
       }
 
       action() {
-        const categories = insertAtIndex(this.args.venue.categories, CAT.PHARMACY, 1);
+        const categories = insertAtIndex(this.args.venue.categories, 'PHARMACY', 1);
         addUpdateAction(this.args.venue, { categories }, null, true);
       }
     },
@@ -5740,11 +5804,11 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       static defaultButtonTooltip = 'Add Supermarket category';
 
       static venueIsFlaggable(args) {
-        return args.pnhMatch.flagsToAdd?.addSuper && !args.categories.includes(CAT.SUPERMARKET_GROCERY);
+        return args.pnhMatch.flagsToAdd?.addSuper && !args.categories.includes('SUPERMARKET_GROCERY');
       }
 
       action() {
-        const categories = insertAtIndex(this.args.venue.categories, CAT.SUPERMARKET_GROCERY, 1);
+        const categories = insertAtIndex(this.args.venue.categories, 'SUPERMARKET_GROCERY', 1);
         addUpdateAction(this.args.venue, { categories }, null, true);
       }
     },
@@ -5761,7 +5825,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       }
 
       action() {
-        const categories = insertAtIndex(this.args.venue.categories, CAT.CONVENIENCE_STORE, 1);
+        const categories = insertAtIndex(this.args.venue.categories, 'CONVENIENCE_STORE', 1);
         addUpdateAction(this.args.venue, { name: 'ARCO ampm', url: 'ampm.com', categories }, null, true);
       }
     },
@@ -5776,9 +5840,9 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
           flaggable = true;
         } else if (args.pnhMatch.notABank) {
           // do nothing
-        } else if (!args.categories.includes(CAT.ATM) && args.categories.includes(CAT.BANK_FINANCIAL)) {
-          if (args.priPNHPlaceCat === CAT.BANK_FINANCIAL) {
-            if (args.categories.indexOf(CAT.OFFICES) !== 0) {
+        } else if (!args.categories.includes('ATM') && args.categories.includes('BANK_FINANCIAL')) {
+          if (args.priPNHPlaceCat === 'BANK_FINANCIAL') {
+            if (args.categories.indexOf('OFFICES') !== 0) {
               flaggable = true;
             }
           } else {
@@ -5789,7 +5853,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       }
 
       action() {
-        const categories = insertAtIndex(this.args.venue.categories, CAT.ATM, 1); // Insert ATM category in the second position
+        const categories = insertAtIndex(this.args.venue.categories, 'ATM', 1); // Insert ATM category in the second position
         addUpdateAction(this.args.venue, { categories }, null, true);
       }
     },
@@ -5800,14 +5864,14 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
 
       static venueIsFlaggable(args) {
         return (
-          (args.categories.includes(CAT.GAS_STATION) && !args.categories.includes(CAT.CONVENIENCE_STORE) && !this.currentFlags.hasFlag(Flag.SubFuel)) || // Don't flag if already asking if this is really a gas station
+          (args.categories.includes('GAS_STATION') && !args.categories.includes('CONVENIENCE_STORE') && !this.currentFlags.hasFlag(Flag.SubFuel)) || // Don't flag if already asking if this is really a gas station
           args.pnhMatch?.flagsToAdd?.addConvStore
         );
       }
 
       action() {
         // Insert C.S. category in the second position
-        const categories = insertAtIndex(this.args.venue.categories, CAT.CONVENIENCE_STORE, 1);
+        const categories = insertAtIndex(this.args.venue.categories, 'CONVENIENCE_STORE', 1);
         addUpdateAction(this.args.venue, { categories }, null, true);
       }
     },
@@ -5821,13 +5885,13 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
           !args.highlightOnly &&
           args.countryCode === PNH_DATA.USA.countryCode &&
           !isVenueParkingLot(args.venue) &&
-          !args.categories.includes(CAT.POST_OFFICE) &&
+          !args.categories.includes('POST_OFFICE') &&
           /\bUSP[OS]\b|\bpost(al)?\s+(service|office)\b/i.test(args.nameBase.replace(/[/\-.]/g, ''))
         );
       }
 
       action() {
-        const categories = insertAtIndex(this.args.venue.categories, CAT.POST_OFFICE, 0);
+        const categories = insertAtIndex(this.args.venue.categories, 'POST_OFFICE', 0);
         addUpdateAction(this.args.venue, { categories }, null, true);
       }
     },
@@ -5837,16 +5901,16 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       static defaultButtonTooltip = 'Change category to Hospital / Urgent Care';
 
       static venueIsFlaggable(args) {
-        return !args.highlightOnly && args.categories.includes(CAT.DOCTOR_CLINIC);
+        return !args.highlightOnly && args.categories.includes('DOCTOR_CLINIC');
       }
 
       action() {
         let categories = this.args.venue.categories;
-        if (!categories.includes(CAT.HOSPITAL_MEDICAL_CARE)) {
-          const indexToReplace = categories.indexOf(CAT.DOCTOR_CLINIC);
+        if (!categories.includes('HOSPITAL_MEDICAL_CARE')) {
+          const indexToReplace = categories.indexOf('DOCTOR_CLINIC');
           if (indexToReplace > -1) {
             categories = categories.slice(); // create a copy
-            categories[indexToReplace] = CAT.HOSPITAL_URGENT_CARE;
+            categories[indexToReplace] = 'HOSPITAL_URGENT_CARE';
           }
           addUpdateAction(this.args.venue, { categories });
         }
@@ -5862,7 +5926,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       static defaultWLTooltip = 'Whitelist category';
 
       static venueIsFlaggable(args) {
-        if (args.categories.includes(CAT.HOSPITAL_URGENT_CARE) && !this.isWhitelisted(args)) {
+        if (args.categories.includes('HOSPITAL_URGENT_CARE') && !this.isWhitelisted(args)) {
           const testName = args.nameBase.toLowerCase().replace(/[^a-z]/g, ' ');
           const testNameWords = testName.split(' ');
           return containsAny(testNameWords, Pnh.HOSPITAL_FULL_MATCH) || Pnh.HOSPITAL_PART_MATCH.some((match) => testName.includes(match));
@@ -5874,14 +5938,14 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
         let categories = this.args.venue.categories.slice();
         let updateIt = false;
         if (categories.length) {
-          const idx = categories.indexOf(CAT.HOSPITAL_URGENT_CARE);
+          const idx = categories.indexOf('HOSPITAL_URGENT_CARE');
           if (idx > -1) {
-            categories[idx] = CAT.DOCTOR_CLINIC;
+            categories[idx] = 'DOCTOR_CLINIC';
             updateIt = true;
           }
           categories = uniq(categories);
         } else {
-          categories.push(CAT.DOCTOR_CLINIC);
+          categories.push('DOCTOR_CLINIC');
           updateIt = true;
         }
         if (updateIt) {
@@ -5903,7 +5967,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
         return (
           !args.highlightOnly &&
           args.venue.updatedOn < new Date('3/28/2017').getTime() &&
-          ((args.categories.includes(CAT.PERSONAL_CARE) && !args.pnhNameRegMatch) || args.categories.includes(CAT.OFFICES))
+          ((args.categories.includes('PERSONAL_CARE') && !args.pnhNameRegMatch) || args.categories.includes('OFFICES'))
         );
       }
 
@@ -5911,16 +5975,16 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
         let categories = this.args.venue.categories.slice();
         let updateIt = false;
         if (categories.length) {
-          [CAT.OFFICES, CAT.PERSONAL_CARE].forEach((cat) => {
+          ['OFFICES', 'PERSONAL_CARE'].forEach((cat) => {
             const idx = categories.indexOf(cat);
             if (idx > -1) {
-              categories[idx] = CAT.DOCTOR_CLINIC;
+              categories[idx] = 'DOCTOR_CLINIC';
               updateIt = true;
             }
           });
           categories = uniq(categories);
         } else {
-          categories.push(CAT.DOCTOR_CLINIC);
+          categories.push('DOCTOR_CLINIC');
           updateIt = true;
         }
         if (updateIt) {
@@ -6036,7 +6100,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
           args.pnhMatch[0] === 'NoMatch' &&
           !isVenueParkingLot(args.venue) &&
           !getChainApprovalPrimaryCatsToIgnore().includes(args.categories[0]) &&
-          !args.categories.includes(CAT.REST_AREAS)
+          !args.categories.includes('REST_AREAS')
         );
       }
 
@@ -6073,7 +6137,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
           args.pnhMatch[0] === 'ApprovalNeeded' &&
           !isVenueParkingLot(args.venue) &&
           !getChainApprovalPrimaryCatsToIgnore().includes(args.categories[0]) &&
-          !args.categories.includes(CAT.REST_AREAS)
+          !args.categories.includes('REST_AREAS')
         );
       }
 
@@ -6106,7 +6170,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
 
       // TODO: Can this be put into venueIsFlaggable?
       static eval(args) {
-        const isUsps = args.countryCode === PNH_DATA.USA.countryCode && !args.categories.includes('PARKING_LOT') && args.categories.includes(CAT.POST_OFFICE);
+        const isUsps = args.countryCode === PNH_DATA.USA.countryCode && !args.categories.includes('PARKING_LOT') && args.categories.includes('POST_OFFICE');
         let storeFinderUrl;
         let isCustom = false;
         if (isUsps) {
@@ -6566,20 +6630,13 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
 
   function initializeCategories() {
     try {
-      logDev('initializeCategories called, sdk=', typeof sdk);
-      logDev('sdk.DataModel=', typeof sdk?.DataModel);
-      logDev('sdk.DataModel.Venues=', typeof sdk?.DataModel?.Venues);
       const subCategories = sdk.DataModel.Venues.getVenueSubCategories();
-      logDev('Retrieved', subCategories.length, 'subcategories');
       subCategories.forEach((subCat) => {
-        CAT[subCat.subCategoryId] = subCat.subCategoryId;
         SUBCATEGORIES_BY_ID[subCat.subCategoryId] = subCat;
       });
-      log(`✓ Loaded ${Object.keys(CAT).length} venue categories from SDK`);
-      logDev('Sample CAT values - HOTEL:', CAT.HOTEL, 'RESTAURANT:', CAT.RESTAURANT);
+      log(`✓ Loaded ${Object.keys(SUBCATEGORIES_BY_ID).length} venue categories from SDK`);
     } catch (e) {
       logDev('Failed to initialize categories from SDK:', e);
-      logDev('CAT after error:', Object.keys(CAT).length, 'keys');
       throw e;
     }
   }
@@ -6967,7 +7024,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
           refreshAllHighlights();
         } else if (_previousVenueServices !== null) {
           // Log for dev visibility
-          console.log(`✓ WMEPH-β (dev): Skipped full re-run — services UI sync only`);
+          logDev('Skipped full re-run — services UI sync only');
         }
 
         // Update tracker for next change
@@ -8381,7 +8438,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
             }
           }
         }
-      } else if (isVenueParkingLot(venue) || args.nameBase?.trim().length || containsAny(args.categories, getCatsThatDontNeedNames())) {
+      } else if (isVenueParkingLot(venue) || args.nameBase?.trim().length || containsAny(args.categories, ['SEA_LAKE_POOL'])) {
         // for non-residential places
         // Phone formatting
         if (containsAny(['CA', 'CO'], [args.regionCode, args.state2L]) && /^\d{3}-\d{3}-\d{4}$/.test(venue.phone)) {
@@ -8502,7 +8559,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
               // If brand is going to be forced, use that.  Otherwise, use existing brand.
               [, args.brand] = args.pnhMatch.forceBrand;
             }
-            if (args.pnhMatch.forceBrand && args.priPNHPlaceCat === CAT.GAS_STATION && venue.brand !== args.pnhMatch.forceBrand) {
+            if (args.pnhMatch.forceBrand && args.priPNHPlaceCat === 'GAS_STATION' && venue.brand !== args.pnhMatch.forceBrand) {
               try {
                 actions.push(sdk.DataModel.Venues.updateVenue({ venueId: venue.id, brand: args.pnhMatch.forceBrand }));
               } catch (e) {
@@ -8533,7 +8590,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
             const { altCategories } = args.pnhMatch;
 
             // name parsing with category exceptions
-            if (args.priPNHPlaceCat === CAT.HOTEL) {
+            if (args.priPNHPlaceCat === 'HOTEL') {
               const nameToCheck = args.nameBase + (args.nameSuffix || '');
               if (nameToCheck.toUpperCase() === args.pnhMatch.name.toUpperCase()) {
                 // If no localization
@@ -8560,9 +8617,9 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
                 // if PNH alts exist
                 insertAtIndex(args.categories, altCategories, 1); //  then insert the alts into the existing category array after the GS category
               }
-              if (args.categories.includes(CAT.HOTEL)) {
+              if (args.categories.includes('HOTEL')) {
                 // Remove LODGING if it exists
-                const lodgingIdx = args.categories.indexOf(CAT.LODGING);
+                const lodgingIdx = args.categories.indexOf('LODGING');
                 if (lodgingIdx > -1) {
                   args.categories.splice(lodgingIdx, 1);
                 }
@@ -8575,13 +8632,13 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
               if (_servicesBanner?.add247 && !_servicesBanner.add247.checked) {
                 _servicesBanner.add247.action();
               }
-            } else if (args.priPNHPlaceCat === CAT.BANK_FINANCIAL && !args.pnhMatch.notABank) {
+            } else if (args.priPNHPlaceCat === 'BANK_FINANCIAL' && !args.pnhMatch.notABank) {
               if (/\batm\b/gi.test(args.nameBase)) {
                 args.nameBase = `${args.pnhMatch.name} ATM`;
               } else {
                 args.nameBase = args.pnhMatch.name;
               }
-            } else if (args.priPNHPlaceCat === CAT.GAS_STATION) {
+            } else if (args.priPNHPlaceCat === 'GAS_STATION') {
               // for PNH gas stations, don't replace existing sub-categories
               if (altCategories?.length) {
                 // if PNH alts exist
@@ -8670,6 +8727,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
             if (!pnhCategoryInfo) {
               throw new Error(`WMEPH: Unexpected category: ${category}`);
             }
+
             let pvaPoint = pnhCategoryInfo.point;
             let pvaArea = pnhCategoryInfo.area;
             if (pnhCategoryInfo.regPoint.includes(args.state2L) || pnhCategoryInfo.regPoint.includes(args.regionCode) || pnhCategoryInfo.regPoint.includes(args.countryCode)) {
@@ -8681,10 +8739,11 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
             }
 
             // If Post Office and VPO or CPU is in the name, always a point.
-            if (args.categories.includes(CAT.POST_OFFICE) && /\b(?:cpu|vpo)\b/i.test(venue.name)) {
+            if (args.categories.includes('POST_OFFICE') && /\b(?:cpu|vpo)\b/i.test(venue.name)) {
               pvaPoint = '1';
               pvaArea = '';
             }
+
 
             const pointSeverity = getPvaSeverity(pvaPoint, venue);
             const areaSeverity = getPvaSeverity(pvaArea, venue);
@@ -8746,7 +8805,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
 
           args.hoursOverlap = venueHasOverlappingHours(args.openingHours);
 
-          args.isUspsPostOffice = args.countryCode === PNH_DATA.USA.countryCode && !args.categories.includes('PARKING_LOT') && args.categories.includes(CAT.POST_OFFICE);
+          args.isUspsPostOffice = args.countryCode === PNH_DATA.USA.countryCode && !args.categories.includes('PARKING_LOT') && args.categories.includes('POST_OFFICE');
 
           if (!args.highlightOnly) {
             // Highlight 24/7 button if hours are set that way, and add button for all places
@@ -8821,7 +8880,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       } // END if (!residential && has name)
 
       if (!args.chainIsClosed) {
-        if (!args.highlightOnly && args.categories.includes(CAT.REST_AREAS)) {
+        if (!args.highlightOnly && args.categories.includes('REST_AREAS')) {
           if (venue.name.match(/^Rest Area.* - /) !== null && args.countryCode === PNH_DATA.USA.countryCode) {
             const newSuffix = args.nameSuffix.replace(/\bMile\b/i, 'mile');
             if (args.nameBase + newSuffix !== venue.name) {
@@ -8875,7 +8934,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
             Flag.AddSuper.eval(args);
             Flag.AppendAMPM.eval(args);
             Flag.PlaceMatched.eval(args);
-          } else if (!args.highlightOnly && args.categories.includes(CAT.POST_OFFICE)) {
+          } else if (!args.highlightOnly && args.categories.includes('POST_OFFICE')) {
             try {
               Flag.LocationFinder.eval(args);
             } catch (e) {
@@ -8976,12 +9035,12 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
           args.levelToLock = args.defaultLockLevel;
         }
         if (args.regionCode === 'SER') {
-          if (args.categories.includes(CAT.COLLEGE_UNIVERSITY) && args.categories.includes('PARKING_LOT')) {
+          if (args.categories.includes('COLLEGE_UNIVERSITY') && args.categories.includes('PARKING_LOT')) {
             args.levelToLock = LOCK_LEVEL_4;
           } else if (
             isVenuePoint(venue) &&
-            args.categories.includes(CAT.COLLEGE_UNIVERSITY) &&
-            (!args.categories.includes(CAT.HOSPITAL_MEDICAL_CARE) || !args.categories.includes(CAT.HOSPITAL_URGENT_CARE))
+            args.categories.includes('COLLEGE_UNIVERSITY') &&
+            (!args.categories.includes('HOSPITAL_MEDICAL_CARE') || !args.categories.includes('HOSPITAL_URGENT_CARE'))
           ) {
             args.levelToLock = LOCK_LEVEL_4;
           }
@@ -9012,10 +9071,10 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
 
         // Turn off unnecessary buttons
         // TODO: handle this in the flag class
-        if (args.categories.includes(CAT.PHARMACY)) {
+        if (args.categories.includes('PHARMACY')) {
           FlagBase.currentFlags.remove(Flag.AddPharm);
         }
-        if (args.categories.includes(CAT.SUPERMARKET_GROCERY)) {
+        if (args.categories.includes('SUPERMARKET_GROCERY')) {
           FlagBase.currentFlags.remove(Flag.AddSuper);
         }
 
@@ -9045,7 +9104,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
         });
 
         // Special case flags
-        if (venue.lockRank === 0 && venue.categories.some((cat) => [CAT.HOSPITAL_MEDICAL_CARE, CAT.HOSPITAL_URGENT_CARE, CAT.GAS_STATION].includes(cat))) {
+        if (venue.lockRank === 0 && venue.categories.some((cat) => ['HOSPITAL_MEDICAL_CARE', 'HOSPITAL_URGENT_CARE', 'GAS_STATION'].includes(cat))) {
           args.totalSeverity = SEVERITY.PINK;
         }
 
@@ -10735,17 +10794,6 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
    * @returns {Object|null} Address object with country, city, state, street fields, or null if unavailable.
    */
   function inferAddress(venue, maxRecursionDepth) {
-    let foundAddresses = [];
-    // Road type priority for address selection (lower priority number = preferred).
-    // Only these types are acceptable; others excluded below.
-    const ACCEPTABLE_ROAD_TYPES = {
-      17: 1,  // PRIVATE_ROAD (highest priority for local named roads)
-      1: 2,   // STREET
-      2: 3,   // PRIMARY_STREET
-      6: 4,   // MAJOR_HIGHWAY
-      7: 5,   // MINOR_HIGHWAY
-      22: 6,  // ALLEY (lowest priority)
-    };
     // Excluded road types (non-addressable/non-drivable): freeways, ramps, walkways, railroads,
     // pedestrian paths, ferries, and other non-street segments.
     // NOTE: Parking lot roads (18) are traversable for connectivity but won't be selected as final addresses.
@@ -10761,24 +10809,18 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
     let segments, nodes;
     try {
       segments = sdk.DataModel.Segments.getAll() || [];
-      nodes = sdk.DataModel.Nodes.getAll() || [];
     } catch (e) {
       logDev('inferAddress: Unable to access SDK data', e);
       segments = [];
-      nodes = [];
     }
-
 
     let stopPoint;
 
     // Make sure a place is selected and data is loaded.
-    if (!(venue && segments.length && nodes.length)) {
-      logDev('inferAddress: No venue or data available');
+    if (!(venue && segments.length)) {
+      logDev('inferAddress: No venue or segment data available');
       return undefined;
     }
-
-    // Get priority for a road type (used for tiebreaking when candidates are equidistant).
-    const getRoadTypePriority = (roadType) => ACCEPTABLE_ROAD_TYPES[roadType] ?? 999;
 
     // Check if segment has a named street (vs unnamed segment like connector roads).
     const hasStreetName = (segment) => {
@@ -10787,69 +10829,13 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       return addr && !addr.isEmpty && addr.street?.name;
     };
 
-    // Pre-compute node->segments index for O(1) lookups during recursive search.
-    // Filters out ignored road types upfront, reducing work during traversal.
-    const segmentsByNode = new Map();
-    for (const seg of segments) {
-      if (!IGNORE_ROAD_TYPES.includes(seg.roadType)) {
-        [seg.fromNodeId, seg.toNodeId].forEach(nodeId => {
-          if (!segmentsByNode.has(nodeId)) {
-            segmentsByNode.set(nodeId, []);
-          }
-          segmentsByNode.get(nodeId).push(seg);
-        });
-      }
-    }
-
-    // Recursive search from starting node through connected segments, expanding outward until named streets found.
-    const findConnections = (startingNodeID, recursionDepth) => {
-      // Stop if we've searched too far (prevent infinite loops in cyclic road networks).
-      if (recursionDepth > maxRecursionDepth) return;
-
-      // O(1) lookup of all valid segments attached to this node (pre-filtered, excludes ignored types).
-      const connectedSegments = segmentsByNode.get(startingNodeID) || [];
-
-      // Partition segments: those with street names vs connectors/unnamed segments.
-      const namedSegments = [];
-      const unnamedSegments = [];
-
-      for (const seg of connectedSegments) {
-        if (hasStreetName(seg)) {
-          namedSegments.push(seg);
-        } else {
-          unnamedSegments.push(seg);
-        }
-      }
-
-      // If named streets found at this depth, collect all and stop expanding from this branch.
-      // Multiple candidates at same depth allow ranking by distance and road type later.
-      if (namedSegments.length > 0) {
-        for (const seg of namedSegments) {
-          const dist = turf.pointToLineDistance(
-            turf.point(stopPoint),
-            turf.lineString(seg.geometry.coordinates),
-            { units: 'meters' }
-          );
-          foundAddresses.push({
-            depth: recursionDepth,
-            distance: dist,
-            segment: seg,
-          });
-        }
-      } else {
-        // No named streets at this node; recurse outward through unnamed segments to next connectivity level.
-        for (const seg of unnamedSegments) {
-          const nextNode = seg.fromNodeId === startingNodeID ? seg.toNodeId : seg.fromNodeId;
-          findConnections(nextNode, recursionDepth + 1);
-        }
-      }
-    };
 
     // Get venue's starting point: prefer primary navigation point, else first, else centroid.
     const { navigationPoints } = venue;
     if (navigationPoints?.length) {
       const primaryPoint = navigationPoints.find((pt) => pt.isPrimary === true) || navigationPoints[0];
       stopPoint = primaryPoint.point.coordinates;
+      logDev('inferAddress: Using navigation point:', stopPoint);
     } else {
       const centroid = getVenueCentroid(venue);
       if (!centroid) {
@@ -10857,53 +10843,56 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
         return null;
       }
       stopPoint = centroid;
+      logDev('inferAddress: Using centroid:', stopPoint);
     }
 
-    // Find the closest node that's ACTUALLY part of the valid segment network.
-    // Don't search among all nodes—only those in segmentsByNode (which have valid segments).
-    let closestNode = null;
-    let minDistance = Infinity;
+    // Scan all nearby segments and rank by distance to venue.
+    // This avoids the node-connectivity problem and directly finds the closest named street.
     const ptCoords = [stopPoint.longitude || stopPoint[0], stopPoint.latitude || stopPoint[1]];
+    const segmentsByDistance = [];
 
-    for (const nodeId of segmentsByNode.keys()) {
-      const node = nodes.find(n => n.id === nodeId);
-      if (node) {
-        const dist = calculatePointDistance(ptCoords, node.geometry.coordinates);
-        if (dist < minDistance) {
-          minDistance = dist;
-          closestNode = node;
-        }
+    logDev('inferAddress: Scanning', segments.length, 'segments for closest named street, venue coords:', ptCoords);
+
+    for (const seg of segments) {
+      if (!IGNORE_ROAD_TYPES.includes(seg.roadType)) {
+        const dist = turf.pointToLineDistance(
+          turf.point(stopPoint),
+          turf.lineString(seg.geometry.coordinates),
+          { units: 'meters' }
+        );
+        segmentsByDistance.push({
+          segment: seg,
+          distance: dist,
+        });
       }
     }
 
-    if (!closestNode) {
-      logDev('inferAddress: No starting node found in segment network');
-      return inferredAddress;
+    // Sort by distance to find closest segments first
+    segmentsByDistance.sort((a, b) => a.distance - b.distance);
+
+    logDev('inferAddress: Scanned', segmentsByDistance.length, 'valid segments. Top 3 by distance:');
+    segmentsByDistance.slice(0, 3).forEach((item, idx) => {
+      const addr = getSegmentAddress(item.segment);
+      logDev(`  ${idx + 1}. segment:${item.segment.id} street:"${addr.street?.name || '(unnamed)'}" dist:${item.distance.toFixed(1)}m type:${item.segment.roadType}`);
+    });
+
+    // Find first named street within a reasonable search range
+    const searchRadiusLimit = 1000; // meters
+    for (const { segment, distance } of segmentsByDistance) {
+      if (distance > searchRadiusLimit) {
+        logDev('inferAddress: Reached search radius limit (' + searchRadiusLimit + 'm) without finding named street');
+        break;
+      }
+      if (hasStreetName(segment)) {
+        const addr = getSegmentAddress(segment);
+        logDev('inferAddress: FOUND - segment:', segment.id, 'street:', addr.street?.name, 'roadType:', segment.roadType, 'distance:', distance.toFixed(1) + 'm');
+        inferredAddress = addr;
+        break;
+      }
     }
 
-    // Start recursive search from closest valid node, expanding outward through connected segments.
-    findConnections(closestNode.id, 1);
-
-    if (foundAddresses.length > 0) {
-      // Sort all candidates by distance (closest first).
-      foundAddresses = _.sortBy(foundAddresses, 'distance');
-
-      const closestDistance = foundAddresses[0].distance;
-
-      // Collect candidates within 10m of closest (treat as equidistant tie).
-      // This small tolerance handles minor floating-point variance and considers nearby parallel streets as equivalent.
-      const tolerance = 10; // meters
-      const candidatesAtClosestDistance = foundAddresses.filter(
-        (addr) => Math.abs(addr.distance - closestDistance) <= tolerance
-      );
-
-      // Among tied candidates, prefer by road type priority (street > private road > highway, etc).
-      // This ensures PRIVATE_ROAD is chosen over MAJOR_HIGHWAY if both are equally close.
-      const best = _.sortBy(candidatesAtClosestDistance, (addr) => getRoadTypePriority(addr.segment.roadType))[0];
-
-      const addr = getSegmentAddress(best.segment);
-      logDev('Address found - segment:', best.segment.id, 'street:', addr.street?.name, 'roadType:', best.segment.roadType, 'distance:', best.distance.toFixed(1) + 'm');
-      inferredAddress = addr;
+    if (!inferredAddress.street?.name) {
+      logDev('inferAddress: No named street found within', searchRadiusLimit + 'm');
     }
 
     return inferredAddress;
@@ -10916,20 +10905,33 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
    * @param {Object} address Object containing country, state, city, street, houseNumber properties (IDs/names as required by SDK).
    */
   function updateAddress(feature, address) {
+    logDev('updateAddress: Called with:', {
+      venueId: feature?.id,
+      street: address?.street?.name,
+      streetId: address?.street?.id,
+      city: address?.city?.name,
+      cityId: address?.city?.id,
+      state: address?.state,
+      country: address?.country,
+      houseNumber: address?.houseNumber
+    });
+
     if (!feature || !address || !address.street?.id) {
-      logDev('updateAddress: missing feature, address, or street ID');
+      logDev('updateAddress: Validation failed - missing feature, address, or street ID');
       return;
     }
 
     try {
-      sdk.DataModel.Venues.updateAddress({
+      const updatePayload = {
         venueId: feature.id,
         streetId: address.street.id,
         houseNumber: address.houseNumber,
-      });
-      logDev('Address inferred and updated');
+      };
+      logDev('updateAddress: Sending update payload:', updatePayload);
+      sdk.DataModel.Venues.updateAddress(updatePayload);
+      logDev('updateAddress: Address inferred and updated successfully');
     } catch (e) {
-      logDev('updateAddress error:', e);
+      logDev('updateAddress error:', e.message, e.stack);
     }
   }
 
@@ -12685,19 +12687,19 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
       const featuresToAdd = [];
       // Do not highlight places if any of these are the primary category.
       const CATS_TO_IGNORE_CUSTOMER_PARKING_HIGHLIGHT = [
-        CAT.BRIDGE,
-        CAT.CANAL,
-        CAT.CHARGING_STATION,
-        CAT.CONSTRUCTION_SITE,
-        CAT.ISLAND,
-        CAT.JUNCTION_INTERCHANGE,
-        CAT.NATURAL_FEATURES,
+        'BRIDGE',
+        'CANAL',
+        'CHARGING_STATION',
+        'CONSTRUCTION_SITE',
+        'ISLAND',
+        'JUNCTION_INTERCHANGE',
+        'NATURAL_FEATURES',
         'PARKING_LOT',
-        CAT.RESIDENCE_HOME,
-        CAT.RIVER_STREAM,
-        CAT.SEA_LAKE_POOL,
-        CAT.SWAMP_MARSH,
-        CAT.TUNNEL,
+        'RESIDENCE_HOME',
+        'RIVER_STREAM',
+        'SEA_LAKE_POOL',
+        'SWAMP_MARSH',
+        'TUNNEL',
         'RESIDENTIAL', // SDK residential category
       ];
 
