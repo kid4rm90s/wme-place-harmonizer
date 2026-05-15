@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        WME Place Harmonizer Beta
 // @namespace   WazeUSA
-// @version     2026.05.14.00
+// @version     2026.05.15.00
 // @description Harmonizes, formats, and locks a selected place
 // @author      WMEPH Development Group
 // @include      https://www.waze.com/editor*
@@ -40,9 +40,8 @@
   // **************************************************************************************************************
   const SHOW_UPDATE_MESSAGE = true;
   const SCRIPT_UPDATE_MESSAGE = [
-    'v 2026.05.08.00 : Fixed: Indiana liquor store bug!',
-    'v 2026.05.08.01 : Fixed: Remove artificial PARKING_LOT category injection based on services',
     'v 2026.05.14.00 : Fixed: Global category string conversion & address inference improvements',
+    'v 2026.05.15.00 : Perf: Add array, regex, and cache optimizations for improved memory/CPU usage',
   ];
 
   // **************************************************************************************************************
@@ -93,6 +92,7 @@
 
   let _layer;
   let _resultsCache = {};
+  let _resultsCacheOrder = []; // Track insertion order for LRU eviction
   let _initAlreadyRun = false; // This is used to skip a couple things if already run once.  This could probably be handled better...
   let _textEntryValues = null; // Store the values entered in text boxes so they can be re-added when the banner is reassembled.
 
@@ -110,6 +110,32 @@
     PINK: 5,
     ORANGE: 6,
     // Historical note: 'lock', 'lock1', and 'adLock' severity levels existed in older WME but are no longer in use
+  };
+
+  // Pre-compiled regex patterns for performance (avoid recompilation in loops)
+  const REGEX_PATTERNS = {
+    BUTTON_ON: /^buttOn_(.*)/i,
+    BUTTON_OFF: /^buttOff_(.+)/i,
+    PS_ON: /^psOn_(.+)/i,
+    PS_OFF: /^psOff_(.+)/i,
+    FORCE_BRAND: /forceBrand<>([^,<]+)/i,
+    LOCAL_URL: /^localURL_(.+)/i,
+    CHECK_LOCALIZATION: /^checkLocalization<>(.+)/i,
+    PHONE: /phone<>(.*?)<>/,
+    KEEP_NAME: /keepName/g,
+    OPTION_ALT_NAME: /^optionAltName<>(.+)/i,
+    CLOSED: /^closed$/i,
+    BRAND_PARENT: /^brandParent(\d+)/,
+    STR_MATCH_ANY: /^strMatchAny$/i,
+    PHARM_HOURS: /^pharmhours$/i,
+    NOT_A_BANK: /^notABank$/i,
+    OPTION_CAT2: /^optionCat2$/i,
+    OPTION_NAME2: /^optionName2$/i,
+    ALT_NAME2_DESC: /^altName2Desc$/i,
+    SUB_FUEL: /^subFuel$/i,
+    REGEX_NAME_MATCH: /^regexNameMatch<>(.+)<>/i,
+    LOCK_AT: /^lockAt(\d)$/i,
+    NO_UPDATE_ALIAS: /^noUpdateAlias$/i,
   };
 
   // Severity level colors (used for both map layer and banner background)
@@ -146,6 +172,24 @@
 
   // SHORTCUT STUFF
   let _shortcutParse;
+  // *** Cache Management Helpers ***
+  // Adds entry to cache with automatic LRU eviction when MAX_CACHE_SIZE is exceeded
+  function addToResultsCache(id, value) {
+    // Remove from order list if it already exists (for updates)
+    const existingIndex = _resultsCacheOrder.indexOf(id);
+    if (existingIndex > -1) {
+      _resultsCacheOrder.splice(existingIndex, 1);
+    }
+    _resultsCacheOrder.push(id); // Add to end (most recent)
+    _resultsCache[id] = value;
+
+    // Evict oldest entry if cache exceeds MAX_CACHE_SIZE
+    if (Object.keys(_resultsCache).length > MAX_CACHE_SIZE) {
+      const oldestId = _resultsCacheOrder.shift();
+      delete _resultsCache[oldestId];
+    }
+  }
+
   let _modifKey = 'Alt+';
   /**
    * Maps keycodes to their corresponding display names.
@@ -2014,16 +2058,17 @@
                   break;
                 case Pnh.SSHeader.category2:
                   this.altCategories = value
-                    ?.split(',')
-                    .map((v) => v.trim())
-                    .map((catName) => {
-                      const cat = country.categoryInfos.getByName(catName)?.id;
-                      if (!cat) {
-                        result.warningMessages.push(`Unrecognized alternate category: ${catName}`);
-                      }
-                      return cat;
-                    })
-                    .filter((cat) => typeof cat === 'string');
+                    ? value.split(',').reduce((acc, catName) => {
+                        const trimmedName = catName.trim();
+                        const cat = country.categoryInfos.getByName(trimmedName)?.id;
+                        if (!cat) {
+                          result.warningMessages.push(`Unrecognized alternate category: ${trimmedName}`);
+                        } else if (typeof cat === 'string') {
+                          acc.push(cat);
+                        }
+                        return acc;
+                      }, [])
+                    : [];
                   break;
                 case Pnh.SSHeader.region:
                   if (value) {
@@ -2064,7 +2109,7 @@
                     /* eslint-disable no-cond-assign */
                     value.forEach((specialCase) => {
                       let match;
-                      if ((match = specialCase.match(/^buttOn_(.*)/i))) {
+                      if ((match = specialCase.match(REGEX_PATTERNS.BUTTON_ON))) {
                         const [, scFlag] = match;
                         switch (scFlag) {
                           case 'addCat2':
@@ -2080,7 +2125,7 @@
                           default:
                             result.warningMessages.push(`Unrecognized ph_specCase value: ${specialCase}`);
                         }
-                      } else if ((match = specialCase.match(/^buttOff_(.+)/i))) {
+                      } else if ((match = specialCase.match(REGEX_PATTERNS.BUTTON_OFF))) {
                         const [, scFlag] = match;
                         switch (scFlag) {
                           case 'addConvStore':
@@ -2089,13 +2134,13 @@
                           default:
                             result.warningMessages.push(`Unrecognized ph_specCase value: ${specialCase}`);
                         }
-                        // } else if (match = specCase.match(/^messOn_(.+)/i)) {
+                        // } else if (match = specCase.match(REGEX_PATTERNS.MESS_ON)) {
                         //    [, scFlag] = match;
                         //    _buttonBanner[scFlag].active = true;
-                        // } else if (match = specCase.match(/^messOff_(.+)/i)) {
+                        // } else if (match = specCase.match(REGEX_PATTERNS.MESS_OFF)) {
                         //    [, scFlag] = match;
                         //    _buttonBanner[scFlag].active = false;
-                      } else if ((match = specialCase.match(/^psOn_(.+)/i))) {
+                      } else if ((match = specialCase.match(REGEX_PATTERNS.PS_ON))) {
                         const [, scFlag] = match;
                         // Map ps_* keys to banner keys (e.g., ps_valet → addValet)
                         const mappedKey = PNH_TO_BANNER_SERVICE_KEY_MAP[scFlag] || scFlag;
@@ -2103,7 +2148,7 @@
                         if (mappedKey && mappedKey.length > 0) {
                           this.servicesToAdd.push(mappedKey);
                         }
-                      } else if ((match = specialCase.match(/^psOff_(.+)/i))) {
+                      } else if ((match = specialCase.match(REGEX_PATTERNS.PS_OFF))) {
                         const [, scFlag] = match;
                         // Map ps_* keys to banner keys (e.g., ps_valet → addValet)
                         const mappedKey = PNH_TO_BANNER_SERVICE_KEY_MAP[scFlag] || scFlag;
@@ -2111,46 +2156,46 @@
                         if (mappedKey && mappedKey.length > 0) {
                           this.servicesToRemove.push(mappedKey);
                         }
-                      } else if ((match = specialCase.match(/forceBrand<>([^,<]+)/i))) {
+                      } else if ((match = specialCase.match(REGEX_PATTERNS.FORCE_BRAND))) {
                         // If brand is going to be forced, use that.  Otherwise, use existing brand.
                         [, this.forceBrand] = match;
-                      } else if ((match = specialCase.match(/^localURL_(.+)/i))) {
+                      } else if ((match = specialCase.match(REGEX_PATTERNS.LOCAL_URL))) {
                         // parseout localURL data if exists (meaning place can have a URL distinct from the chain URL
                         [, this.localURLcheck] = new RegExp(match, 'i');
-                      } else if ((match = specialCase.match(/^checkLocalization<>(.+)/i))) {
+                      } else if ((match = specialCase.match(REGEX_PATTERNS.CHECK_LOCALIZATION))) {
                         const [, localizationString] = match;
                         this.localizationRegEx = new RegExp(localizationString, 'g');
-                      } else if ((match = specialCase.match(/phone<>(.*?)<>/))) {
+                      } else if ((match = specialCase.match(REGEX_PATTERNS.PHONE))) {
                         [, this.recommendedPhone] = match;
-                      } else if (/keepName/g.test(specialCase)) {
+                      } else if (REGEX_PATTERNS.KEEP_NAME.test(specialCase)) {
                         this.keepName = true;
-                      } else if ((match = specialCase.match(/^optionAltName<>(.+)/i))) {
+                      } else if ((match = specialCase.match(REGEX_PATTERNS.OPTION_ALT_NAME))) {
                         [, this.optionalAlias] = match;
-                      } else if (/^closed$/i.test(specialCase)) {
+                      } else if (REGEX_PATTERNS.CLOSED.test(specialCase)) {
                         this.chainIsClosed = true;
-                      } else if ((match = specialCase.match(/^brandParent(\d+)/))) {
+                      } else if ((match = specialCase.match(REGEX_PATTERNS.BRAND_PARENT))) {
                         try {
                           this.brandParentLevel = parseInt(match[1], 10);
                         } catch {
                           result.warningMessages.push(`Invalid forceBrand value: ${specialCase}`);
                         }
-                      } else if (/^strMatchAny$/i.test(specialCase)) {
+                      } else if (REGEX_PATTERNS.STR_MATCH_ANY.test(specialCase)) {
                         this.strMatchAny = true;
-                      } else if (/^pharmhours$/i.test(specialCase)) {
+                      } else if (REGEX_PATTERNS.PHARM_HOURS.test(specialCase)) {
                         this.pharmhours = true;
-                      } else if (/^notABank$/i.test(specialCase)) {
+                      } else if (REGEX_PATTERNS.NOT_A_BANK.test(specialCase)) {
                         this.notABank = true;
-                      } else if (/^optionCat2$/i.test(specialCase)) {
+                      } else if (REGEX_PATTERNS.OPTION_CAT2.test(specialCase)) {
                         this.optionCat2 = true;
-                      } else if (/^optionName2$/i.test(specialCase)) {
+                      } else if (REGEX_PATTERNS.OPTION_NAME2.test(specialCase)) {
                         this.optionName2 = true;
-                      } else if (/^altName2Desc$/i.test(specialCase)) {
+                      } else if (REGEX_PATTERNS.ALT_NAME2_DESC.test(specialCase)) {
                         this.altName2Desc = true;
-                      } else if (/^subFuel$/i.test(specialCase)) {
+                      } else if (REGEX_PATTERNS.SUB_FUEL.test(specialCase)) {
                         this.subFuel = true;
-                      } else if ((match = specialCase.match(/^regexNameMatch<>(.+)<>/i))) {
+                      } else if ((match = specialCase.match(REGEX_PATTERNS.REGEX_NAME_MATCH))) {
                         this.regexNameMatch = new RegExp(match[1].replace(/\\/, '\\').replace(/<or>/g, '|'), 'i');
-                      } else if ((match = specialCase.match(/^lockAt(\d)$/i))) {
+                      } else if ((match = specialCase.match(REGEX_PATTERNS.LOCK_AT))) {
                         try {
                           this.lockAt = parseInt(match[1], 10);
                           if (this.lockAt < 1 || this.lockAt > 6) {
@@ -2159,7 +2204,7 @@
                         } catch {
                           result.warningMessages.push(`Invalid ph_speccase lockAt value (must be between 1 and 6): ${specialCase}`);
                         }
-                      } else if (/^noUpdateAlias$/i.test(specialCase)) {
+                      } else if (REGEX_PATTERNS.NO_UPDATE_ALIAS.test(specialCase)) {
                         this.noUpdateAlias = true;
                       } else if (/^betaEnable$/i.test(specialCase)) {
                         this.betaEnable = true;
@@ -7175,7 +7220,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
             // eslint-disable-next-line no-cond-assign
             if (force || (cachedResult = _resultsCache[id]) === undefined || venue.updatedOn > cachedResult.u) {
               severity = harmonizePlaceGo(venue, 'highlight', undefined, false); // false = cache miss
-              _resultsCache[id] = { s: severity, u: venue.updatedOn || -1 };
+              addToResultsCache(id, { s: severity, u: venue.updatedOn || -1 });
             } else {
               severity = cachedResult.s;
               wmephStats.cacheHits++; // Direct cache hit (no harmonizePlaceGo call)
@@ -11519,6 +11564,7 @@ id="WMEPH-zipAltNameAdd"autocomplete="off" style="font-size:0.85em;width:65px;pa
     $('#WMEPH-ReloadDataBtn').click(async () => {
       $('#WMEPH-ReloadDataBtn').attr('disabled', true);
       _resultsCache = {};
+      _resultsCacheOrder = [];
       wmephStats = {
         harmonizeCount: 0,
         totalHarmonizeTime: 0,
